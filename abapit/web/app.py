@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .. import config, history
+from .. import __version__, config, history
 from ..assign import plan as plan_assignment
 from ..auth import AuthError, token_cache
 from ..client import ApiClient, ApiError, sections_for
@@ -244,6 +244,7 @@ def create_app(demo: bool = False,
         fresh_org = cfg.get_active() if cfg else None
         return templates.TemplateResponse(request, template, {
             "active": active,
+            "version": __version__,
             "nav": nav,
             "denied": fresh_org.denied_sections() if fresh_org else set(),
             "probed_at": fresh_org.probed_at if fresh_org else "",

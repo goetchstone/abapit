@@ -4,13 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block titletag %}abapit{% endblock %}</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v={{ version }}">
 {% block head %}{% endblock %}
 </head>
 <body>
 <div class="layout">
   <aside class="sidebar">
-    <div class="brand"><a href="/" title="Apple Business API Tool">ab<span>api</span>t</a></div>
+    <div class="brand"><a href="/">ab<span>api</span>t</a>
+      <div class="tagline">Apple Business API Tool</div></div>
     <div class="org-chip">
       {% if demo %}
         <strong>Demo Org</strong><span class="badge demo">demo data</span>
