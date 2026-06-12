@@ -82,6 +82,31 @@ def test_429_gives_up_after_retries(org, fake_tokens, monkeypatch):
     assert exc.value.status == 429
 
 
+def test_transient_network_error_retried_on_get(org, fake_tokens, monkeypatch):
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.RemoteProtocolError("multiple Transfer-Encoding headers")
+        return httpx.Response(200, json={"data": []})
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    assert client.devices() == []
+    assert calls["n"] == 2
+
+
+def test_network_error_not_retried_on_post(org, fake_tokens):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    with pytest.raises(ApiError) as exc:
+        client.create_device_activity("ASSIGN_DEVICES", "srv", ["AAA"])
+    assert "network error" in str(exc.value)
+
+
 def test_api_error_surfaces_apple_error_detail(org, fake_tokens):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, json={"errors": [

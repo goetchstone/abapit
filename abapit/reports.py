@@ -137,10 +137,18 @@ def _cell(value) -> str:
     return str(value)
 
 
+def _csv_safe(value: str) -> str:
+    """Neutralize spreadsheet formula injection: a cell starting with
+    = + - @ or a tab would execute as a formula when opened in Excel."""
+    if value and value[0] in "=+-@\t":
+        return "'" + value
+    return value
+
+
 def items_to_csv(items: list[dict]) -> str:
     header, rows = items_to_rows(items)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(header)
-    writer.writerows(rows)
+    writer.writerows([[_csv_safe(cell) for cell in row] for row in rows])
     return buf.getvalue()

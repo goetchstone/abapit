@@ -295,12 +295,20 @@ def create_app(demo: bool = False,
 
     # ---- pages -----------------------------------------------------------
 
+    def _server_ids(c, servers):
+        """One relationships call per server — in parallel; Apple latency is
+        ~300-500ms per call, so serializing these is what makes pages slow."""
+        if not servers:
+            return {}
+        with ThreadPoolExecutor(max_workers=min(8, len(servers))) as pool:
+            ids = pool.map(lambda s: c.mdm_server_device_ids(s["id"]), servers)
+            return {s["id"]: i for s, i in zip(servers, ids)}
+
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
         devices = cached("devices", lambda c: c.devices())
         servers = cached("mdm_servers", lambda c: c.mdm_servers())
-        server_ids = cached("server_device_ids", lambda c: {
-            s["id"]: c.mdm_server_device_ids(s["id"]) for s in servers})
+        server_ids = cached("server_device_ids", lambda c: _server_ids(c, servers))
         stats = device_stats(devices)
         assignment = assignment_summary(devices, servers, server_ids)
         events = []
@@ -360,10 +368,15 @@ def create_app(demo: bool = False,
 
     @app.get("/devices/{device_id}", response_class=HTMLResponse)
     def device_page(request: Request, device_id: str):
-        c = client()
-        device = c.device(device_id)
-        coverage = c.device_applecare(device_id)
-        server = c.device_assigned_server(device_id)
+        def fetch_detail(c):
+            # Three independent calls — fetch concurrently (~1 RTT, not 3).
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                f_device = pool.submit(c.device, device_id)
+                f_coverage = pool.submit(c.device_applecare, device_id)
+                f_server = pool.submit(c.device_assigned_server, device_id)
+                return f_device.result(), f_coverage.result(), f_server.result()
+
+        device, coverage, server = cached(f"device:{device_id}", fetch_detail)
         servers = cached("mdm_servers", lambda cc: cc.mdm_servers())
         return render(request, "device_detail.html", active="devices",
                       device=device, coverage=coverage, server=server,
@@ -372,8 +385,7 @@ def create_app(demo: bool = False,
     @app.get("/mdm-servers", response_class=HTMLResponse)
     def mdm_servers_page(request: Request):
         servers = cached("mdm_servers", lambda c: c.mdm_servers())
-        server_ids = cached("server_device_ids", lambda c: {
-            s["id"]: c.mdm_server_device_ids(s["id"]) for s in servers})
+        server_ids = cached("server_device_ids", lambda c: _server_ids(c, servers))
         counts = {sid: len(ids) for sid, ids in server_ids.items()}
         return render(request, "mdm_servers.html", active="mdm_servers",
                       servers=servers, counts=counts)
@@ -510,8 +522,7 @@ def create_app(demo: bool = False,
     def _assignment_context():
         devices = cached("devices", lambda c: c.devices())
         servers = cached("mdm_servers", lambda c: c.mdm_servers())
-        server_ids = cached("server_device_ids", lambda c: {
-            s["id"]: c.mdm_server_device_ids(s["id"]) for s in servers})
+        server_ids = cached("server_device_ids", lambda c: _server_ids(c, servers))
         return devices, servers, server_ids
 
     @app.get("/assign", response_class=HTMLResponse)
@@ -551,7 +562,8 @@ def create_app(demo: bool = False,
         org_key = c.org.client_id
         app.state.cache = {k: v for k, v in app.state.cache.items()
                            if k[0] != org_key
-                           or k[1] not in ("devices", "server_device_ids")}
+                           or (k[1] not in ("devices", "server_device_ids")
+                               and not k[1].startswith("device:"))}
         app.state.force_live[org_key] = time.time()
         verb = "to" if action == "assign" else "from"
         msg = (f"Submitted: {action} {len(p['moves'])} device(s) {verb} "
@@ -646,26 +658,9 @@ def create_app(demo: bool = False,
                 return _csv_response(
                     items_to_csv(items),
                     f"applecare-{taken_at[:10]}.csv")
+        from ..client import fetch_applecare_bulk
         devices = cached("devices", lambda cc: cc.devices())
-        rows = []
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            results = pool.map(
-                lambda d: (d, c.device_applecare(d["id"])), devices)
-            for device, coverages in results:
-                for cov in coverages:
-                    a = cov.get("attributes", {})
-                    rows.append({
-                        "type": "applecare", "id": cov.get("id", ""),
-                        "attributes": {
-                            "serialNumber": device["id"],
-                            "deviceModel": device["attributes"].get("deviceModel"),
-                            "description": a.get("description"),
-                            "status": a.get("status"),
-                            "paymentType": a.get("paymentType"),
-                            "startDateTime": a.get("startDateTime"),
-                            "endDateTime": a.get("endDateTime"),
-                            "isRenewable": a.get("isRenewable"),
-                        }})
+        rows, _failed = fetch_applecare_bulk(c, devices)
         return _csv_response(items_to_csv(rows), "applecare.csv")
 
     def _csv_response(body: str, filename: str) -> Response:

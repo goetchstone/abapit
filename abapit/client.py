@@ -68,7 +68,11 @@ class ApiClient:
         self.base_url = BASE_URLS[org.scope]
         self.page_limit = page_limit
         self.max_pages = max_pages
-        self._http = httpx.Client(timeout=60, transport=transport)
+        # HTTP/2: Apple's HTTP/1.1 endpoints intermittently emit malformed
+        # Transfer-Encoding headers under concurrent keep-alive reuse; h2
+        # framing avoids that entirely and multiplexes parallel calls.
+        self._http = httpx.Client(timeout=60, transport=transport,
+                                  http2=transport is None)
 
     # -- plumbing ---------------------------------------------------------
 
@@ -77,10 +81,19 @@ class ApiClient:
         token = token_cache.get(self.org)
         refreshed = False
         for attempt in range(5):
-            resp = self._http.request(
-                method, url, params=params, json=json_body,
-                headers={"Authorization": f"Bearer {token}"}
-            )
+            try:
+                resp = self._http.request(
+                    method, url, params=params, json=json_body,
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+            except httpx.HTTPError as exc:
+                # Transient transport/protocol errors (Apple occasionally
+                # emits malformed responses under load). Retry GETs only —
+                # a retried POST could double-submit an activity.
+                if method == "GET" and attempt < 4:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                raise ApiError(0, f"network error: {exc}") from exc
             if resp.status_code == 401 and not refreshed:
                 # Token may have just expired; refresh once and retry.
                 token_cache.invalidate(self.org)
@@ -283,6 +296,47 @@ class ApiClient:
 
     def close(self) -> None:
         self._http.close()
+
+
+def fetch_applecare_bulk(client, devices: list[dict],
+                         max_workers: int = 5) -> tuple[list[dict], list[str]]:
+    """Coverage for many devices, one call each — parallel sweep, then a
+    sequential retry pass over any failures (Apple intermittently errors
+    under burst concurrency but answers the same calls fine one-by-one).
+    Returns (rows with serialNumber injected, serials that failed twice)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(serial: str):
+        rows = []
+        for cov in client.device_applecare(serial):
+            attrs = dict(cov.get("attributes", {}))
+            attrs["serialNumber"] = serial
+            cov_id = cov.get("id") or f"{serial}:{attrs.get('description', '')}"
+            rows.append({"type": "applecare", "id": cov_id, "attributes": attrs})
+        return rows
+
+    items: list[dict] = []
+    failed: list[str] = []
+    serials = [d.get("id", "") for d in devices]
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        def attempt(serial):
+            try:
+                return one(serial), None
+            except Exception:
+                return [], serial
+        for rows, failure in pool.map(attempt, serials):
+            items.extend(rows)
+            if failure:
+                failed.append(failure)
+
+    still_failed: list[str] = []
+    for serial in failed:
+        time.sleep(0.3)  # gentle, sequential second chance
+        try:
+            items.extend(one(serial))
+        except Exception:
+            still_failed.append(serial)
+    return items, still_failed
 
 
 def _error_message(resp: httpx.Response) -> str:

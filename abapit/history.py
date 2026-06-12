@@ -132,18 +132,12 @@ def _collect(client, include_applecare: bool, progress, errors: dict) -> dict:
         try:
             say(f"fetching AppleCare coverage ({len(out['devices'])} devices, "
                 "one call each)…")
-            rows = []
-            with ThreadPoolExecutor(max_workers=5) as pool:
-                results = pool.map(
-                    lambda d: (d, client.device_applecare(d["id"])), out["devices"])
-                for device, coverages in results:
-                    for cov in coverages:
-                        attrs = dict(cov.get("attributes", {}))
-                        attrs["serialNumber"] = device["id"]
-                        cov_id = cov.get("id") or f"{device['id']}:{attrs.get('description', '')}"
-                        rows.append({"type": "applecare", "id": cov_id,
-                                     "attributes": attrs})
+            from .client import fetch_applecare_bulk
+            rows, failed = fetch_applecare_bulk(client, out["devices"])
             out["applecare"] = rows
+            if failed:
+                errors["applecare_partial"] = (
+                    f"{len(failed)} device(s) failed: {', '.join(failed[:10])}")
         except Exception as exc:
             errors["applecare"] = str(exc)
 

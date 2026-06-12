@@ -18,6 +18,17 @@ def dev(serial):
             "attributes": {"serialNumber": serial}}
 
 
+def test_csv_export_neutralizes_formula_injection():
+    from abapit.reports import items_to_csv
+    items = [{"type": "orgDevices", "id": "AAA",
+              "attributes": {"deviceModel": "=HYPERLINK(\"http://evil\")",
+                             "color": "@SUM(1)", "status": "OK"}}]
+    body = items_to_csv(items)
+    assert "'=HYPERLINK" in body
+    assert "'@SUM" in body
+    assert ",OK" in body  # normal values untouched
+
+
 def test_coverage_report_buckets():
     items = [
         cov("D1", "ACTIVE", end_days=10),     # expiring soon
