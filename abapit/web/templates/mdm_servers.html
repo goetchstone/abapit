@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block titletag %}MDM Servers · abapit{% endblock %}
+{% block title %}Device Management Services{% endblock %}
+{% block content %}
+
+<table>
+  <thead><tr><th>Name</th><th>Type</th><th>Created</th><th>Updated</th><th class="r">Devices</th></tr></thead>
+  <tbody>
+  {% for s in servers %}
+  <tr>
+    <td><a href="/mdm-servers/{{ s.id }}">{{ s.attributes.get('serverName', s.id) }}</a></td>
+    <td>{{ s.attributes.get('serverType', '') }}</td>
+    <td>{{ s.attributes.get('createdDateTime') | dt }}</td>
+    <td>{{ s.attributes.get('updatedDateTime') | dt }}</td>
+    <td class="r">{{ counts.get(s.id, 0) }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">No device management services.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted footnote"><a href="/export/mdm-servers.csv">Export CSV</a></p>
+{% endblock %}

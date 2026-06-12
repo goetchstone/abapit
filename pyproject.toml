@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "abapit"
+version = "0.1.0"
+description = "Apple Business API Tool — a local web GUI for the Apple Business Manager and Apple School Manager APIs, built for Mac admins."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "abapit contributors" }]
+keywords = ["apple", "abm", "asm", "mdm", "macadmin", "apple-business-manager"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "jinja2>=3.1",
+    "httpx>=0.27",
+    "PyJWT[crypto]>=2.8",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+abapit = "abapit.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/goetchstone/abapit"
+
+[tool.hatch.build.targets.wheel]
+packages = ["abapit"]

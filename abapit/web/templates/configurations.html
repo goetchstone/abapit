@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block titletag %}Configurations · abapit{% endblock %}
+{% block title %}Configurations{% endblock %}
+{% block content %}
+
+<table>
+  <thead><tr><th>Name</th><th>Type</th><th>Platforms</th><th>Created</th><th>Updated</th></tr></thead>
+  <tbody>
+  {% for c in configurations %}
+  <tr>
+    <td>{{ c.attributes.get('name', c.id) }}</td>
+    <td>{{ c.attributes.get('type', '') }}</td>
+    <td>{{ c.attributes.get('configuredForPlatforms', []) | join(', ') | replace('PLATFORM_', '') }}</td>
+    <td>{{ c.attributes.get('createdDateTime') | dt }}</td>
+    <td>{{ c.attributes.get('updatedDateTime') | dt }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">No configurations.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted footnote"><a href="/export/configurations.csv">Export CSV</a></p>
+{% endblock %}

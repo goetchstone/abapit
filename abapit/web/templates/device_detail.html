@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% from "_macros.html" import attr_table %}
+{% block titletag %}{{ device.id }} · abapit{% endblock %}
+{% block title %}<a class="crumb" href="/devices">Devices</a> / {{ device.id }}{% endblock %}
+{% block content %}
+
+<div class="panels">
+  <section class="panel">
+    <h2>{{ device.attributes.get('deviceModel', 'Device') }}</h2>
+    {{ attr_table(device.attributes) }}
+  </section>
+
+  <section class="panel">
+    <h2>MDM assignment</h2>
+    {% if server %}
+      <p>Assigned to
+        <a href="/mdm-servers/{{ server.id }}"><strong>{{ server.attributes.get('serverName', server.id) }}</strong></a>
+        ({{ server.attributes.get('serverType', '') }})
+      </p>
+    {% else %}
+      <p class="warn-text">Not assigned to any device management service.</p>
+    {% endif %}
+
+    <h2 class="spaced">AppleCare &amp; warranty</h2>
+    {% for cov in coverage %}
+    <div class="coverage {{ cov.attributes.get('status', '') | lower }}">
+      <div class="cov-head">
+        <strong>{{ cov.attributes.get('description', 'Coverage') }}</strong>
+        <span class="pill {{ cov.attributes.get('status', '') | lower }}">{{ cov.attributes.get('status', '') }}</span>
+      </div>
+      <div class="muted">
+        {{ cov.attributes.get('startDateTime') | dt }} → {{ cov.attributes.get('endDateTime') | dt }}
+        {% if cov.attributes.get('paymentType') not in (None, 'NONE') %} · {{ cov.attributes.get('paymentType') }}{% endif %}
+        {% if cov.attributes.get('isRenewable') %} · renewable{% endif %}
+      </div>
+    </div>
+    {% else %}
+    <p class="muted">No coverage records.</p>
+    {% endfor %}
+  </section>
+</div>
+{% endblock %}

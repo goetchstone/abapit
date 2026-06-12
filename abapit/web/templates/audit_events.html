@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block titletag %}Audit Events · abapit{% endblock %}
+{% block title %}Audit Events <span class="count">{{ total }}</span>{% endblock %}
+{% block content %}
+
+<form method="get" class="toolbar">
+  <label>From <input type="date" name="start" value="{{ start }}"></label>
+  <label>To <input type="date" name="end" value="{{ end }}"></label>
+  <input type="text" name="type" value="{{ type }}" placeholder="Event type (optional), e.g. DEVICE_ADDED_TO_ORG">
+  <button class="btn">Query</button>
+</form>
+
+<table>
+  <thead><tr><th>When</th><th>Type</th><th>Category</th><th>Actor</th><th>Subject</th><th>Outcome</th></tr></thead>
+  <tbody>
+  {% for e in events %}
+  <tr>
+    <td>{{ e.attributes.get('eventDateTime') | dtt }}</td>
+    <td>{{ e.attributes.get('type', '') }}</td>
+    <td>{{ e.attributes.get('category', '') }}</td>
+    <td>{{ e.attributes.get('actorName') or e.attributes.get('actorId', '') }}</td>
+    <td>{{ e.attributes.get('subjectName') or e.attributes.get('subjectId', '') }}</td>
+    <td>{{ e.attributes.get('outcome', '') }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">No events in this range.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

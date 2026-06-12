@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "_macros.html" import attr_table %}
+{% block titletag %}{{ server.attributes.get('serverName', server.id) }} · abapit{% endblock %}
+{% block title %}<a class="crumb" href="/mdm-servers">MDM Servers</a> / {{ server.attributes.get('serverName', server.id) }}{% endblock %}
+{% block content %}
+
+<div class="panels">
+  <section class="panel">
+    <h2>Service details</h2>
+    {{ attr_table(server.attributes) }}
+  </section>
+
+  <section class="panel wide">
+    <h2>Assigned devices <span class="count">{{ serials | length }}</span></h2>
+    <input data-filter="#serials" type="search" placeholder="Filter serials…">
+    <table id="serials">
+      <thead><tr><th>Serial number</th></tr></thead>
+      <tbody>
+      {% for serial in serials %}
+      <tr><td><a href="/devices/{{ serial }}">{{ serial }}</a></td></tr>
+      {% else %}
+      <tr><td class="muted">No devices assigned.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

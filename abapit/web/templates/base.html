@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titletag %}abapit{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><a href="/" title="Apple Business API Tool">ab<span>api</span>t</a></div>
+    <div class="org-chip">
+      {% if demo %}
+        <strong>Demo Org</strong><span class="badge demo">demo data</span>
+      {% elif org %}
+        <strong>{{ org.name }}</strong><span class="badge">{{ org.scope }}</span>
+      {% else %}
+        <strong>No org configured</strong>
+      {% endif %}
+    </div>
+    {% for group, items in nav %}
+    <div class="nav-group">
+      <div class="nav-title">{{ group }}</div>
+      {% for key, href, label in items %}
+      <a class="nav-link{% if active == key %} on{% endif %}" href="{{ href }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    <div class="nav-group">
+      <div class="nav-title">System</div>
+      <a class="nav-link{% if active == 'settings' %} on{% endif %}" href="/settings">Settings</a>
+    </div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <h1>{% block title %}{% endblock %}</h1>
+      <div class="actions">
+        {% if not demo and orgs|length > 1 %}
+        <form method="post" id="orgswitch">
+          <select onchange="orgswitch.action='/settings/orgs/'+this.value+'/activate';orgswitch.submit()">
+            {% for slug, o in orgs.items() %}
+            <option value="{{ slug }}"{% if slug == active_org %} selected{% endif %}>{{ o.name }}</option>
+            {% endfor %}
+          </select>
+        </form>
+        {% endif %}
+        <form method="post" action="/refresh">
+          <input type="hidden" name="next" value="{{ request.url.path }}">
+          <button class="btn" title="Clear the 5-minute cache and refetch from Apple">&#x21bb; Refresh</button>
+        </form>
+      </div>
+    </header>
+    {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<script>
+// Instant client-side filter: <input data-filter="#some-table"> hides
+// non-matching rows of the target table as you type.
+document.querySelectorAll('input[data-filter]').forEach(function (inp) {
+  var table = document.querySelector(inp.dataset.filter);
+  if (!table) return;
+  inp.addEventListener('input', function () {
+    var q = inp.value.toLowerCase();
+    table.querySelectorAll('tbody tr').forEach(function (tr) {
+      tr.style.display = tr.textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+    });
+  });
+});
+</script>
+</body>
+</html>

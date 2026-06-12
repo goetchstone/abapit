@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block titletag %}Devices · abapit{% endblock %}
+{% block title %}Devices <span class="count">{{ total }}</span>{% endblock %}
+{% block content %}
+
+<form method="get" class="toolbar">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search serial, model, order number…">
+  <select name="family">
+    <option value="">All families</option>
+    {% for f in families %}<option value="{{ f }}"{% if f == family %} selected{% endif %}>{{ f }}</option>{% endfor %}
+  </select>
+  <select name="status">
+    <option value="">All statuses</option>
+    {% for s in statuses %}<option value="{{ s }}"{% if s == status %} selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <button class="btn">Filter</button>
+  <a class="btn ghost" href="/export/devices.csv">Export CSV</a>
+</form>
+
+{% if shown < matched %}
+<p class="muted">Showing first {{ shown }} of {{ matched }} matches — narrow the search or use the CSV export for everything.</p>
+{% endif %}
+
+<table>
+  <thead><tr>
+    <th>Serial</th><th>Model</th><th>Family</th><th>Capacity</th><th>Color</th>
+    <th>Status</th><th>Added</th>
+  </tr></thead>
+  <tbody>
+  {% for d in devices %}
+  <tr>
+    <td><a href="/devices/{{ d.id }}">{{ d.id }}</a></td>
+    <td>{{ d.attributes.get('deviceModel', '') }}</td>
+    <td>{{ d.attributes.get('productFamily', '') }}</td>
+    <td>{{ d.attributes.get('deviceCapacity', '') }}</td>
+    <td>{{ d.attributes.get('color', '') }}</td>
+    <td><span class="pill {{ d.attributes.get('status', '') | lower }}">{{ d.attributes.get('status', '') }}</span></td>
+    <td>{{ d.attributes.get('addedToOrgDateTime') | dt }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="7" class="muted">No devices match.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

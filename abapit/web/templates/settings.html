@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block titletag %}Settings · abapit{% endblock %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+
+{% if demo %}
+<div class="flash">Running in <strong>demo mode</strong> — fake data, no Apple credentials used.
+Orgs added here will be used the next time you run <code>abapit serve</code> without <code>--demo</code>.</div>
+{% endif %}
+
+<div class="panels">
+  <section class="panel wide">
+    <h2>Organizations</h2>
+    {% if orgs %}
+    <table>
+      <thead><tr><th></th><th>Name</th><th>Scope</th><th>Client ID</th><th>Key</th><th></th></tr></thead>
+      <tbody>
+      {% for slug, o in orgs.items() %}
+      <tr>
+        <td>{% if slug == active_org %}<span class="pill active">active</span>{% endif %}</td>
+        <td>{{ o.name }}</td>
+        <td>{{ o.scope }}</td>
+        <td><code>{{ o.client_id[:24] }}{% if o.client_id | length > 24 %}…{% endif %}</code></td>
+        <td><code>{{ o.private_key_path }}</code></td>
+        <td class="row-actions">
+          {% if slug != active_org %}
+          <form method="post" action="/settings/orgs/{{ slug }}/activate"><button class="btn small">Use</button></form>
+          {% endif %}
+          <form method="post" action="/settings/orgs/{{ slug }}/test"><button class="btn small ghost">Test</button></form>
+          <form method="post" action="/settings/orgs/{{ slug }}/delete"
+                onsubmit="return confirm('Remove org {{ o.name }}? The saved key file will be deleted.')">
+            <button class="btn small danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No orgs yet. Add one below — or run <code>abapit serve --demo</code> to explore with fake data.</p>
+    {% endif %}
+    <p class="muted footnote">Config lives in <code>{{ config_path }}</code> (keys are stored separately, chmod 600).</p>
+  </section>
+
+  <section class="panel wide">
+    <h2>Add an organization</h2>
+    <p class="muted">In Apple Business Manager (or Apple School Manager): <strong>Preferences → API</strong>,
+    create an API account, download the private key (.pem / .p8), and copy the Client ID and Key ID.</p>
+    <form method="post" action="/settings/orgs" class="form-grid">
+      <label>Display name <input name="name" required placeholder="Acme Corp"></label>
+      <label>Type
+        <select name="scope">
+          <option value="business">Apple Business Manager</option>
+          <option value="school">Apple School Manager</option>
+        </select>
+      </label>
+      <label>Client ID <input name="client_id" required placeholder="BUSINESSAPI.xxxxxxxx-…"></label>
+      <label>Key ID <input name="key_id" required placeholder="xxxxxxxx-xxxx-…"></label>
+      <label class="full">Private key (paste PEM)
+        <textarea name="pem" rows="5" placeholder="-----BEGIN EC PRIVATE KEY-----&#10;…&#10;-----END EC PRIVATE KEY-----"></textarea>
+      </label>
+      <label class="full">…or path to an existing key file
+        <input name="key_path" placeholder="~/Downloads/abm_key.pem">
+      </label>
+      <div class="full"><button class="btn primary">Add org</button></div>
+    </form>
+  </section>
+</div>
+{% endblock %}

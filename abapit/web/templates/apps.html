@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block titletag %}Apps · abapit{% endblock %}
+{% block title %}Apps{% endblock %}
+{% block content %}
+
+<form method="get" class="toolbar">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search name or bundle id…">
+  <button class="btn">Search</button>
+  <a class="btn ghost" href="/export/apps.csv">Export CSV</a>
+</form>
+
+<table>
+  <thead><tr><th>Name</th><th>Bundle ID</th><th>Version</th><th>OS</th><th>Custom</th><th></th></tr></thead>
+  <tbody>
+  {% for a in apps %}
+  <tr>
+    <td>{{ a.attributes.get('name', '') }}</td>
+    <td><code>{{ a.attributes.get('bundleId', '') }}</code></td>
+    <td>{{ a.attributes.get('version', '') }}</td>
+    <td>{{ a.attributes.get('supportedOS', []) | join(', ') | replace('SUPPORTED_OS_', '') }}</td>
+    <td>{{ 'yes' if a.attributes.get('isCustomApp') else 'no' }}</td>
+    <td>{% if a.attributes.get('appStoreUrl') %}<a href="{{ a.attributes.get('appStoreUrl') }}" target="_blank" rel="noopener">App Store ↗</a>{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">No apps.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

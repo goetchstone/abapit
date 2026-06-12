@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block titletag %}Changes · abapit{% endblock %}
+{% block title %}Changes{% endblock %}
+{% block content %}
+
+<div class="panels">
+  <section class="panel wide">
+    <div class="cov-head">
+      <h2>Snapshots <span class="count">{{ total_snaps }}</span></h2>
+      <form method="post" action="/changes/snapshot" class="toolbar" style="margin:0">
+        <label class="muted"><input type="checkbox" name="applecare" value="1" checked>
+          include AppleCare (one API call per device)</label>
+        <button class="btn primary">Take snapshot now</button>
+      </form>
+    </div>
+    {% if snaps %}
+    <table>
+      <thead><tr><th>#</th><th>Taken</th><th>Org</th><th class="r">Devices</th></tr></thead>
+      <tbody>
+      {% for s in snaps %}
+      <tr>
+        <td>{{ s.id }}</td>
+        <td>{{ s.taken_at | dtt }}</td>
+        <td>{{ s.org_name }}</td>
+        <td class="r">{{ s.device_count }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No snapshots yet. Apple's API only shows the <em>current</em> state of your org —
+    snapshots are how abapit can tell you what changed over time. Take one now, then another later
+    (or cron <code>abapit snapshot</code>), and this page will show added/removed devices,
+    MDM assignment moves, coverage changes, and more.</p>
+    {% endif %}
+    <p class="muted footnote">Stored in <code>{{ db_path }}</code> — plain SQLite, query it with
+    <code>sqlite3</code> or Datasette (<code>devices_view</code>, <code>applecare_view</code>).</p>
+  </section>
+
+  {% if total_snaps >= 2 %}
+  <section class="panel wide">
+    <form method="get" class="toolbar">
+      <label>From
+        <select name="old">
+          {% for s in snaps %}<option value="{{ s.id }}"{% if old_snap and s.id == old_snap.id %} selected{% endif %}>#{{ s.id }} — {{ s.taken_at | dtt }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>To
+        <select name="new">
+          {% for s in snaps %}<option value="{{ s.id }}"{% if new_snap and s.id == new_snap.id %} selected{% endif %}>#{{ s.id }} — {{ s.taken_at | dtt }}</option>{% endfor %}
+        </select>
+      </label>
+      <button class="btn">Compare</button>
+    </form>
+
+    {% if not delta %}
+    <p class="muted">No differences between snapshot #{{ old_snap.id }} and #{{ new_snap.id }}.</p>
+    {% endif %}
+  </section>
+
+  {% for resource, changes in (delta or {}).items() %}
+  <section class="panel wide">
+    <h2>{{ resource | replace('_', ' ') | title }}
+      <span class="count">+{{ changes.added | length }} / −{{ changes.removed | length }} / ~{{ changes.changed | length }}</span>
+    </h2>
+
+    {% if changes.added %}
+    <h2 class="spaced">Added</h2>
+    <table>
+      <tbody>
+      {% for item in changes.added %}
+      <tr><td class="diff-add">+</td><td><code>{{ item.id }}</code></td><td>{{ item.label }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if changes.removed %}
+    <h2 class="spaced">Removed</h2>
+    <table>
+      <tbody>
+      {% for item in changes.removed %}
+      <tr><td class="diff-del">−</td><td><code>{{ item.id }}</code></td><td>{{ item.label }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if changes.changed %}
+    <h2 class="spaced">Changed</h2>
+    <table>
+      <tbody>
+      {% for item in changes.changed %}
+      <tr>
+        <td class="diff-mod">~</td>
+        <td><code>{{ item.id }}</code> <span class="muted">{{ item.label }}</span></td>
+        <td>
+          {% for f in item.fields %}
+          <div><code>{{ f.field }}</code>:
+            <span class="diff-del">{{ f.old if f.old is not none else '∅' }}</span> →
+            <span class="diff-add">{{ f.new if f.new is not none else '∅' }}</span></div>
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+  {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}

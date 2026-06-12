@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block titletag %}Blueprints · abapit{% endblock %}
+{% block title %}Blueprints{% endblock %}
+{% block content %}
+
+<table>
+  <thead><tr><th>Name</th><th>Description</th><th>Status</th><th>App licenses</th><th>Updated</th></tr></thead>
+  <tbody>
+  {% for b in blueprints %}
+  <tr>
+    <td><a href="/blueprints/{{ b.id }}">{{ b.attributes.get('name', b.id) }}</a></td>
+    <td>{{ b.attributes.get('description') or '—' }}</td>
+    <td><span class="pill {{ b.attributes.get('status', '') | lower }}">{{ b.attributes.get('status', '') }}</span></td>
+    <td>{% if b.attributes.get('appLicenseDeficient') %}<span class="pill expired">deficient</span>{% else %}ok{% endif %}</td>
+    <td>{{ b.attributes.get('updatedDateTime') | dt }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">No blueprints.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted footnote"><a href="/export/blueprints.csv">Export CSV</a></p>
+{% endblock %}

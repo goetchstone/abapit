@@ -1,0 +1,14 @@
+{% macro attr_table(attrs) %}
+<table class="kv">
+  <tbody>
+  {% for key, value in attrs.items() %}
+    <tr>
+      <th>{{ key }}</th>
+      <td>{% if value is none or value == "" %}<span class="muted">—</span>
+          {% elif value is iterable and value is not string %}{{ value | join(", ") }}
+          {% else %}{{ value }}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}

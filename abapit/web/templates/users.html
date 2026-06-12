@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block titletag %}Users · abapit{% endblock %}
+{% block title %}Users <span class="count">{{ total }}</span>{% endblock %}
+{% block content %}
+
+<form method="get" class="toolbar">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search name, email, department…">
+  <button class="btn">Search</button>
+  <a class="btn ghost" href="/export/users.csv">Export CSV</a>
+</form>
+
+<table>
+  <thead><tr>
+    <th>Name</th><th>Managed Apple Account</th><th>Department</th>
+    <th>Title</th><th>Status</th><th>External</th>
+  </tr></thead>
+  <tbody>
+  {% for u in users %}
+  <tr>
+    <td>{{ u.attributes.get('firstName', '') }} {{ u.attributes.get('lastName', '') }}</td>
+    <td>{{ u.attributes.get('managedAppleAccount', '') }}</td>
+    <td>{{ u.attributes.get('department') or '—' }}</td>
+    <td>{{ u.attributes.get('jobTitle') or '—' }}</td>
+    <td><span class="pill {{ u.attributes.get('status', '') | lower }}">{{ u.attributes.get('status', '') }}</span></td>
+    <td>{{ 'yes' if u.attributes.get('isExternalUser') else 'no' }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">No users match.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

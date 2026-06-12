@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block titletag %}Error · abapit{% endblock %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="panel">
+  <p class="warn-text">{{ message }}</p>
+  {% if hint %}<p class="muted">{{ hint }}</p>{% endif %}
+  <p><a class="btn" href="/">← Back to dashboard</a> <a class="btn ghost" href="/settings">Settings</a></p>
+</div>
+{% endblock %}

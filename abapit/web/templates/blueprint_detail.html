@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "_macros.html" import attr_table %}
+{% block titletag %}{{ blueprint.attributes.get('name', blueprint.id) }} · abapit{% endblock %}
+{% block title %}<a class="crumb" href="/blueprints">Blueprints</a> / {{ blueprint.attributes.get('name', blueprint.id) }}{% endblock %}
+{% block content %}
+
+<div class="panels">
+  <section class="panel">
+    <h2>Blueprint details</h2>
+    {{ attr_table(blueprint.attributes) }}
+  </section>
+
+  <section class="panel">
+    {% for kind, items in included.items() %}
+    <h2{% if not loop.first %} class="spaced"{% endif %}>{{ kind }} <span class="count">{{ items | length }}</span></h2>
+    <ul class="plain">
+      {% for item in items %}
+      <li>{{ item.attributes.get('name', item.id) }}
+        {% if item.attributes.get('bundleId') %}<span class="muted"><code>{{ item.attributes.get('bundleId') }}</code></span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No related apps, packages, or configurations attached.</p>
+    {% endfor %}
+  </section>
+</div>
+{% endblock %}

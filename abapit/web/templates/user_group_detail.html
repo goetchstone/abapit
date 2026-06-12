@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_macros.html" import attr_table %}
+{% block titletag %}{{ group.attributes.get('name', group.id) }} · abapit{% endblock %}
+{% block title %}<a class="crumb" href="/user-groups">User Groups</a> / {{ group.attributes.get('name', group.id) }}{% endblock %}
+{% block content %}
+
+<div class="panels">
+  <section class="panel">
+    <h2>Group details</h2>
+    {{ attr_table(group.attributes) }}
+  </section>
+
+  <section class="panel wide">
+    <h2>Members <span class="count">{{ members | length }}</span></h2>
+    {% if unresolved > 0 %}<p class="muted">{{ unresolved }} member id(s) not in the cached user list — hit Refresh.</p>{% endif %}
+    <input data-filter="#members" type="search" placeholder="Filter members…">
+    <table id="members">
+      <thead><tr><th>Name</th><th>Managed Apple Account</th><th>Department</th><th>Status</th></tr></thead>
+      <tbody>
+      {% for u in members %}
+      <tr>
+        <td>{{ u.attributes.get('firstName', '') }} {{ u.attributes.get('lastName', '') }}</td>
+        <td>{{ u.attributes.get('managedAppleAccount', '') }}</td>
+        <td>{{ u.attributes.get('department') or '—' }}</td>
+        <td><span class="pill {{ u.attributes.get('status', '') | lower }}">{{ u.attributes.get('status', '') }}</span></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="muted">No members.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block titletag %}Dashboard · abapit{% endblock %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+
+<div class="cards">
+  <div class="card"><div class="num">{{ stats.total }}</div><div class="label">Devices in org</div></div>
+  <div class="card"><div class="num">{{ stats.added_30 }}</div><div class="label">Added last 30 days</div></div>
+  <div class="card"><div class="num">{{ stats.added_90 }}</div><div class="label">Added last 90 days</div></div>
+  <div class="card{% if assignment.unassigned %} warn{% endif %}">
+    <div class="num">{{ assignment.unassigned | length }}</div>
+    <div class="label">Not assigned to any MDM</div>
+  </div>
+</div>
+
+<div class="panels">
+  <section class="panel">
+    <h2>Devices added per month</h2>
+    <div class="chart">
+      {% for month, count in stats.added_by_month %}
+      <div class="col" title="{{ month }}: {{ count }}">
+        <div class="bar" style="height:{{ (count / stats.month_max * 100) | round(1) if stats.month_max else 0 }}%"></div>
+        <div class="tick">{{ month[5:] }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>By product family</h2>
+    {% for family, count in stats.by_family %}
+    <div class="hbar-row">
+      <span class="hbar-label">{{ family }}</span>
+      <div class="hbar"><div style="width:{{ (count / stats.family_max * 100) | round(1) }}%"></div></div>
+      <span class="hbar-num">{{ count }}</span>
+    </div>
+    {% endfor %}
+    <h2 class="spaced">By status</h2>
+    {% for status, count in stats.by_status %}
+    <div class="hbar-row">
+      <span class="hbar-label">{{ status }}</span>
+      <div class="hbar"><div style="width:{{ (count / stats.total * 100) | round(1) if stats.total }}%"></div></div>
+      <span class="hbar-num">{{ count }}</span>
+    </div>
+    {% endfor %}
+  </section>
+
+  <section class="panel">
+    <h2>Devices per MDM server</h2>
+    <table>
+      <thead><tr><th>Server</th><th>Type</th><th class="r">Devices</th></tr></thead>
+      <tbody>
+      {% for row in assignment.per_server %}
+      <tr>
+        <td><a href="/mdm-servers/{{ row.server.id }}">{{ row.server.attributes.get('serverName', row.server.id) }}</a></td>
+        <td>{{ row.server.attributes.get('serverType', '') }}</td>
+        <td class="r">{{ row.count }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if assignment.unassigned %}
+    <h2 class="spaced">Unassigned devices</h2>
+    <div class="chips">
+      {% for serial in assignment.unassigned[:30] %}
+      <a class="chip" href="/devices/{{ serial }}">{{ serial }}</a>
+      {% endfor %}
+      {% if assignment.unassigned | length > 30 %}<span class="muted">+{{ assignment.unassigned | length - 30 }} more</span>{% endif %}
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Top models</h2>
+    <table>
+      <thead><tr><th>Model</th><th class="r">Count</th></tr></thead>
+      <tbody>
+      {% for model, count in stats.top_models %}
+      <tr><td>{{ model }}</td><td class="r">{{ count }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% if events %}
+  <section class="panel wide">
+    <h2>Recent activity (last 7 days) <a class="more" href="/audit-events">all events →</a></h2>
+    <table>
+      <thead><tr><th>When</th><th>Event</th><th>Actor</th><th>Subject</th><th>Outcome</th></tr></thead>
+      <tbody>
+      {% for e in events %}
+      <tr>
+        <td>{{ e.attributes.get('eventDateTime') | dtt }}</td>
+        <td>{{ e.attributes.get('type', '') }}</td>
+        <td>{{ e.attributes.get('actorName', '') }}</td>
+        <td>{{ e.attributes.get('subjectName', '') }}</td>
+        <td>{{ e.attributes.get('outcome', '') }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</div>
+
+<p class="muted footnote">Reports: <a href="/export/devices.csv">devices.csv</a> ·
+<a href="/export/applecare.csv">applecare.csv</a> (instant from the latest
+<a href="/changes">snapshot</a> when one exists; otherwise one API call per device)</p>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block titletag %}User Groups · abapit{% endblock %}
+{% block title %}User Groups{% endblock %}
+{% block content %}
+
+<table>
+  <thead><tr><th>Name</th><th>Type</th><th>Status</th><th class="r">Members</th><th>Updated</th></tr></thead>
+  <tbody>
+  {% for g in groups %}
+  <tr>
+    <td><a href="/user-groups/{{ g.id }}">{{ g.attributes.get('name', g.id) }}</a></td>
+    <td>{{ g.attributes.get('type', '') }}</td>
+    <td><span class="pill {{ g.attributes.get('status', '') | lower }}">{{ g.attributes.get('status', '') }}</span></td>
+    <td class="r">{{ g.attributes.get('totalMemberCount', '') }}</td>
+    <td>{{ g.attributes.get('updatedDateTime') | dt }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">No user groups.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted footnote"><a href="/export/user-groups.csv">Export CSV</a></p>
+{% endblock %}

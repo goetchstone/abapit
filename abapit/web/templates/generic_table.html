@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block titletag %}{{ title }} · abapit{% endblock %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+
+<input data-filter="#generic" type="search" placeholder="Filter…">
+<div class="scroll-x">
+<table id="generic">
+  <thead><tr>{% for col in header %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for row in rows %}
+  <tr>{% for cell in row %}<td>{{ cell if cell != '' else '—' }}</td>{% endfor %}</tr>
+  {% else %}
+  <tr><td colspan="{{ header | length }}" class="muted">Nothing here.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if export %}<p class="muted footnote"><a href="/export/{{ export }}.csv">Export CSV</a></p>{% endif %}
+{% endblock %}

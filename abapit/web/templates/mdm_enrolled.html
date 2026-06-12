@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block titletag %}Apple MDM Enrolled · abapit{% endblock %}
+{% block title %}Apple MDM Enrolled Devices <span class="count">{{ total }}</span>{% endblock %}
+{% block content %}
+
+<p class="muted">Devices enrolled in Apple's built-in device management.</p>
+<input data-filter="#enrolled" type="search" placeholder="Filter…">
+<table id="enrolled">
+  <thead><tr><th>Serial</th><th>Name</th><th>Family</th><th>Enrolled user</th></tr></thead>
+  <tbody>
+  {% for d in items %}
+  <tr>
+    <td>{{ d.attributes.get('serialNumber', d.id) }}</td>
+    <td>{{ d.attributes.get('deviceName', '') }}</td>
+    <td>{{ d.attributes.get('productFamily', '') }}</td>
+    <td>{{ d.attributes.get('enrolledUserId') or '—' }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="muted">No Apple-MDM-enrolled devices.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted footnote"><a href="/export/mdm-enrolled.csv">Export CSV</a></p>
+{% endblock %}
