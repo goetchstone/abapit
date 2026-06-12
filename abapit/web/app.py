@@ -8,23 +8,27 @@ org so casual browsing doesn't hammer Apple's rate limits.
 
 from __future__ import annotations
 
+import contextvars
+import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .. import config, history
 from ..auth import AuthError, token_cache
 from ..client import ApiClient, ApiError, sections_for
 from ..demo import DemoClient
-from ..reports import (assignment_summary, device_stats, items_to_csv,
-                       items_to_rows, parse_iso)
+from ..reports import (assignment_summary, coverage_report, device_stats,
+                       items_to_csv, items_to_rows, parse_iso)
 
 CACHE_TTL = 300  # seconds
 MAX_TABLE_ROWS = 500
@@ -50,7 +54,29 @@ NAV = [
         ("audit_events", "/audit-events", "Audit Events"),
         ("changes", "/changes", "Changes"),
     ]),
+    ("Reports", [("coverage", "/reports/coverage", "Coverage")]),
 ]
+
+# Web-cache entries that can be warm-started from the latest snapshot:
+# cache name -> snapshot resource name.
+SNAPSHOT_RESOURCES = {
+    "devices": "devices",
+    "mdm_servers": "mdm_servers",
+    "server_device_ids": "assignments",
+    "mdm_enrolled": "mdm_enrolled",
+    "users": "users",
+    "user_groups": "user_groups",
+    "apps": "apps",
+    "packages": "packages",
+    "blueprints": "blueprints",
+    "configurations": "configurations",
+}
+
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+# Set per-request when a page was served from snapshot data; read by render().
+_stale_ctx: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "abapit_stale", default=None)
 
 # section key -> (client method name, page title) for generic listings/exports
 RESOURCES = {
@@ -77,7 +103,8 @@ def fmt_date(value, with_time: bool = False):
     return parsed.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
 
 
-def create_app(demo: bool = False) -> FastAPI:
+def create_app(demo: bool = False,
+               allowed_hosts: list[str] | None = None) -> FastAPI:
     app = FastAPI(title="abapit", docs_url=None, redoc_url=None)
     base = Path(__file__).parent
     app.mount("/static", StaticFiles(directory=base / "static"), name="static")
@@ -85,10 +112,34 @@ def create_app(demo: bool = False) -> FastAPI:
     templates.env.filters["dt"] = fmt_date
     templates.env.filters["dtt"] = lambda v: fmt_date(v, with_time=True)
 
+    # Reject requests whose Host header isn't ours — blocks DNS-rebinding
+    # attacks, where a malicious site points its own domain at 127.0.0.1.
+    app.add_middleware(TrustedHostMiddleware,
+                       allowed_hosts=allowed_hosts or list(LOCAL_HOSTS))
+
+    @app.middleware("http")
+    async def block_cross_origin_posts(request: Request, call_next):
+        """Browsers happily fire cross-origin form POSTs at localhost.
+        Reject mutations that arrive from another web origin (CSRF);
+        same-origin browser posts and non-browser clients are unaffected."""
+        if request.method == "POST":
+            origin = request.headers.get("origin")
+            if origin:
+                origin_host = urlsplit(origin).hostname
+                if origin_host != request.url.hostname and origin_host not in LOCAL_HOSTS:
+                    return Response("Cross-origin POST blocked.", status_code=403)
+            fetch_site = request.headers.get("sec-fetch-site")
+            if fetch_site and fetch_site not in ("same-origin", "same-site", "none"):
+                return Response("Cross-site request blocked.", status_code=403)
+        return await call_next(request)
+
     app.state.demo = demo
     app.state.demo_client = DemoClient() if demo else None
     app.state.clients = {}          # org slug -> ApiClient
     app.state.cache = {}            # (org key, name) -> (timestamp, value)
+    app.state.refreshing = set()    # cache keys with a background fetch in flight
+    app.state.refresh_lock = threading.Lock()
+    app.state.force_live = {}       # org key -> ts; set by Refresh to bypass warm-start
 
     # ---- helpers ---------------------------------------------------------
 
@@ -104,14 +155,71 @@ def create_app(demo: bool = False) -> FastAPI:
         return app.state.clients[cfg.active_org]
 
     def cached(name: str, fetch, force: bool = False):
+        """Stale-while-revalidate, with snapshot warm-start.
+
+        - fresh in-memory hit: serve it
+        - expired in-memory hit: serve it, refetch in the background
+        - no hit but a snapshot has this resource: serve the snapshot copy
+          (flagged so the page shows a provenance banner), refetch in the
+          background — this is what makes a 20k-device org open instantly
+        - otherwise (first ever run, or right after Refresh): blocking fetch
+        """
         c = client()
         key = (c.org.client_id, name)
         hit = app.state.cache.get(key)
         if not force and hit and time.time() - hit[0] < CACHE_TTL:
             return hit[1]
+        forced_live = time.time() - app.state.force_live.get(c.org.client_id, 0) < 120
+        if not force and not forced_live:
+            if hit:
+                _refresh_in_background(key, fetch, c)
+                return hit[1]
+            warm = _snapshot_value(c, name)
+            if warm is not None:
+                taken_at, value = warm
+                _refresh_in_background(key, fetch, c)
+                _stale_ctx.set({"taken_at": taken_at})
+                return value
         value = fetch(c)
         app.state.cache[key] = (time.time(), value)
         return value
+
+    def _snapshot_value(c, name: str):
+        """Reconstruct a cache entry from the latest snapshot, if possible."""
+        resource = SNAPSHOT_RESOURCES.get(name)
+        if resource is None or c.is_demo:
+            return None
+        found = history.latest_resource(c.org.client_id, resource)
+        if found is None:
+            return None
+        _, taken_at, items = found
+        if name == "server_device_ids":
+            by_server: dict[str, list[str]] = {}
+            for item in items:
+                server_id = item["attributes"].get("serverId", "")
+                by_server.setdefault(server_id, []).append(item["id"])
+            return taken_at, by_server
+        return taken_at, items
+
+    def _refresh_in_background(key, fetch, c) -> None:
+        """Fetch live data on a daemon thread; single-flight per cache key."""
+        with app.state.refresh_lock:
+            if key in app.state.refreshing:
+                return
+            app.state.refreshing.add(key)
+
+        def run():
+            try:
+                value = fetch(c)
+                app.state.cache[key] = (time.time(), value)
+            except Exception as exc:
+                print(f"warning: background refresh of {key[1]} failed: {exc}",
+                      file=sys.stderr)
+            finally:
+                with app.state.refresh_lock:
+                    app.state.refreshing.discard(key)
+
+        threading.Thread(target=run, daemon=True, name=f"refresh-{key[1]}").start()
 
     def render(request: Request, template: str, active: str = "", **ctx):
         c = None
@@ -128,6 +236,7 @@ def create_app(demo: bool = False) -> FastAPI:
         return templates.TemplateResponse(request, template, {
             "active": active,
             "nav": nav,
+            "stale": _stale_ctx.get(),
             "demo": app.state.demo,
             "org": c.org if c else None,
             "orgs": cfg.orgs if cfg else {},
@@ -387,12 +496,62 @@ def create_app(demo: bool = False) -> FastAPI:
             msg += f". Skipped: {', '.join(errors)}"
         return RedirectResponse(f"/changes?msg={quote(msg)}", status_code=303)
 
+    # ---- coverage report ----------------------------------------------------
+
+    def _coverage_source():
+        """(taken_at, applecare items, devices) from the latest snapshot —
+        or computed live in demo mode. None when no snapshot has coverage."""
+        c = client()
+        if c.is_demo:
+            devices = c.devices()
+            items = []
+            for device in devices:
+                for cov in c.device_applecare(device["id"]):
+                    attrs = dict(cov.get("attributes", {}))
+                    attrs["serialNumber"] = device["id"]
+                    items.append({"type": "applecare", "id": cov.get("id", ""),
+                                  "attributes": attrs})
+            return None, items, devices
+        found = history.latest_resource(c.org.client_id, "applecare")
+        if found is None:
+            return None
+        snapshot_id, taken_at, items = found
+        return taken_at, items, history.snapshot_resource(snapshot_id, "devices")
+
+    @app.get("/reports/coverage", response_class=HTMLResponse)
+    def coverage_page(request: Request, days: int = 90):
+        guard("coverage")
+        days = max(1, min(days, 1825))
+        source = _coverage_source()
+        if source is None:
+            return render(request, "coverage.html", active="coverage",
+                          report=None, days=days, taken_at=None, device_index={})
+        taken_at, items, devices = source
+        report = coverage_report(items, devices, days)
+        return render(request, "coverage.html", active="coverage",
+                      report=report, days=days, taken_at=taken_at,
+                      device_index={d["id"]: d for d in devices})
+
     # ---- exports ----------------------------------------------------------
 
     @app.get("/export/{resource}.csv")
-    def export_csv(resource: str, live: int = 0):
+    def export_csv(resource: str, live: int = 0, days: int = 90):
         if resource == "applecare":
             return _applecare_csv(live=bool(live))
+        if resource == "coverage-expiring":
+            guard("coverage")
+            source = _coverage_source()
+            if source is None:
+                raise ApiError(404, "No snapshot with AppleCare data yet — "
+                                    "take one on the Changes page first.")
+            taken_at, items, devices = source
+            report = coverage_report(items, devices, max(1, min(days, 1825)))
+            rows = [{"type": "coverage", "id": r.get("serialNumber", ""),
+                     "attributes": {k: r.get(k) for k in (
+                         "serialNumber", "description", "paymentType",
+                         "startDateTime", "endDateTime", "days_left", "isRenewable")}}
+                    for r in report["expiring"]]
+            return _csv_response(items_to_csv(rows), f"coverage-expiring-{days}d.csv")
         if resource not in RESOURCES:
             raise ApiError(404, f"Unknown export {resource!r}")
         method, _ = RESOURCES[resource]
@@ -495,6 +654,9 @@ def create_app(demo: bool = False) -> FastAPI:
         try:
             key = client().org.client_id
             app.state.cache = {k: v for k, v in app.state.cache.items() if k[0] != key}
+            # User explicitly asked for fresh data — bypass snapshot
+            # warm-start for the next couple of minutes.
+            app.state.force_live[key] = time.time()
         except NoOrgError:
             pass
         if not next.startswith("/") or next.startswith("//"):

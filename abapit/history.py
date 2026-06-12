@@ -84,11 +84,15 @@ def db_path() -> Path:
 
 
 def connect() -> sqlite3.Connection:
-    data_dir().mkdir(parents=True, exist_ok=True)
+    directory = data_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o700)
     conn = sqlite3.connect(db_path())
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    # The snapshot DB is a full inventory of the org — owner-only access.
+    os.chmod(db_path(), 0o600)
     return conn
 
 
@@ -230,29 +234,49 @@ def diff_snapshots(old_id: int, new_id: int) -> dict:
     return result
 
 
-def latest_applecare(org_client_id: str) -> tuple[str, list[dict]] | None:
-    """Coverage rows from the most recent snapshot that includes AppleCare.
+def snapshot_resource(snapshot_id: int, resource: str) -> list[dict]:
+    """Items of one resource from one snapshot, in JSON:API shape."""
+    conn = connect()
+    try:
+        return [{"type": resource, "id": r["item_id"],
+                 "attributes": json.loads(r["attributes"])}
+                for r in conn.execute(
+                    "SELECT item_id, attributes FROM items "
+                    "WHERE snapshot_id = ? AND resource = ? ORDER BY item_id",
+                    (snapshot_id, resource))]
+    finally:
+        conn.close()
 
-    Returns (taken_at, items in JSON:API shape) or None.
+
+def latest_resource(org_client_id: str, resource: str) -> tuple[int, str, list[dict]] | None:
+    """The most recent stored copy of a resource for an org.
+
+    Returns (snapshot_id, taken_at, items) or None if no snapshot has it.
     """
     conn = connect()
     try:
         row = conn.execute(
             "SELECT DISTINCT s.id, s.taken_at FROM snapshots s "
-            "JOIN items i ON i.snapshot_id = s.id AND i.resource = 'applecare' "
+            "JOIN items i ON i.snapshot_id = s.id AND i.resource = ? "
             "WHERE s.org_client_id = ? ORDER BY s.id DESC LIMIT 1",
-            (org_client_id,)).fetchone()
-        if row is None:
-            return None
-        items = [{"type": "applecare", "id": r["item_id"],
-                  "attributes": json.loads(r["attributes"])}
-                 for r in conn.execute(
-                     "SELECT item_id, attributes FROM items "
-                     "WHERE snapshot_id = ? AND resource = 'applecare' "
-                     "ORDER BY item_id", (row["id"],))]
-        return row["taken_at"], items
+            (resource, org_client_id)).fetchone()
     finally:
         conn.close()
+    if row is None:
+        return None
+    return row["id"], row["taken_at"], snapshot_resource(row["id"], resource)
+
+
+def latest_applecare(org_client_id: str) -> tuple[str, list[dict]] | None:
+    """Coverage rows from the most recent snapshot that includes AppleCare.
+
+    Returns (taken_at, items in JSON:API shape) or None.
+    """
+    found = latest_resource(org_client_id, "applecare")
+    if found is None:
+        return None
+    _, taken_at, items = found
+    return taken_at, items
 
 
 def prune(org_client_id: str, keep: int) -> int:

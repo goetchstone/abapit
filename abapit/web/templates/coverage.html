@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block titletag %}Coverage · abapit{% endblock %}
+{% block title %}AppleCare &amp; Warranty Coverage{% endblock %}
+{% block content %}
+
+{% if report is none %}
+<div class="panel">
+  <p class="muted">No snapshot with AppleCare data yet. This report reads from your
+  fleet history so it's instant at any fleet size — go to
+  <a href="/changes">Changes</a> and take a snapshot with
+  "include AppleCare" checked (or run <code>abapit snapshot</code>), then come back.</p>
+</div>
+{% else %}
+
+<form method="get" class="toolbar">
+  <label>Expiring within
+    <select name="days" onchange="this.form.submit()">
+      {% for d in (30, 60, 90, 180, 365) %}
+      <option value="{{ d }}"{% if d == days %} selected{% endif %}>{{ d }} days</option>
+      {% endfor %}
+    </select>
+  </label>
+  <a class="btn ghost" href="/export/coverage-expiring.csv?days={{ days }}">Export CSV</a>
+  {% if taken_at %}<span class="muted">From snapshot taken {{ taken_at | dtt }}</span>
+  {% else %}<span class="muted">Live demo data</span>{% endif %}
+</form>
+
+<div class="cards">
+  <div class="card"><div class="num">{{ report.covered_count }}</div><div class="label">Devices with active coverage</div></div>
+  <div class="card{% if report.expiring %} warn{% endif %}">
+    <div class="num">{{ report.expiring | length }}</div>
+    <div class="label">Coverages expiring within {{ days }} days</div>
+  </div>
+  <div class="card{% if report.uncovered %} warn{% endif %}">
+    <div class="num">{{ report.uncovered | length }}</div>
+    <div class="label">Devices with no active coverage</div>
+  </div>
+</div>
+
+<div class="panels">
+  <section class="panel wide">
+    <h2>Expiring within {{ days }} days</h2>
+    <table>
+      <thead><tr><th>Serial</th><th>Model</th><th>Coverage</th><th>Payment</th><th>Ends</th><th class="r">Days left</th></tr></thead>
+      <tbody>
+      {% for row in report.expiring %}
+      <tr>
+        <td><a href="/devices/{{ row.serialNumber }}">{{ row.serialNumber }}</a></td>
+        <td>{{ device_index.get(row.serialNumber, {}).get('attributes', {}).get('deviceModel', '—') }}</td>
+        <td>{{ row.description }}</td>
+        <td>{{ row.paymentType if row.paymentType != 'NONE' else '—' }}</td>
+        <td>{{ row.endDateTime | dt }}</td>
+        <td class="r"><span class="pill {{ 'expired' if row.days_left < 30 else '' }}">{{ row.days_left }}</span></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="muted">Nothing expires in this window. 🎉</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel wide">
+    <h2>Devices with no active coverage <span class="count">{{ report.uncovered | length }}</span></h2>
+    <input data-filter="#uncovered" type="search" placeholder="Filter…">
+    <table id="uncovered">
+      <thead><tr><th>Serial</th><th>Model</th><th>Added to org</th></tr></thead>
+      <tbody>
+      {% for d in report.uncovered[:200] %}
+      <tr>
+        <td><a href="/devices/{{ d.id }}">{{ d.id }}</a></td>
+        <td>{{ d.attributes.get('deviceModel', '') }}</td>
+        <td>{{ d.attributes.get('addedToOrgDateTime') | dt }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="muted">Every device has active coverage.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if report.uncovered | length > 200 %}<p class="muted">Showing first 200.</p>{% endif %}
+  </section>
+</div>
+{% endif %}
+{% endblock %}

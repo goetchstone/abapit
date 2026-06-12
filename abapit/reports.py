@@ -83,6 +83,36 @@ def assignment_summary(devices: list[dict], servers: list[dict],
             "assigned_count": len(assigned & all_serials)}
 
 
+def coverage_report(applecare_items: list[dict], devices: list[dict],
+                    days: int, now: datetime | None = None) -> dict:
+    """Coverage expiry analysis from snapshot (or live) data.
+
+    Returns active-coverage counts, coverages expiring within `days`
+    (soonest first), and devices with no active coverage at all.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now + timedelta(days=days)
+    expiring = []
+    covered_serials: set = set()
+    for item in applecare_items:
+        attrs = item.get("attributes", {})
+        if attrs.get("status") != "ACTIVE":
+            continue
+        serial = attrs.get("serialNumber")
+        covered_serials.add(serial)
+        end = parse_iso(attrs.get("endDateTime"))
+        if end and now <= end <= cutoff:
+            expiring.append({**attrs, "days_left": (end - now).days})
+    expiring.sort(key=lambda row: row["days_left"])
+    uncovered = [d for d in devices if d.get("id") not in covered_serials]
+    return {
+        "expiring": expiring,
+        "uncovered": uncovered,
+        "covered_count": len(covered_serials & {d.get("id") for d in devices}),
+        "days": days,
+    }
+
+
 def items_to_rows(items: list[dict]) -> tuple[list[str], list[list]]:
     """Flatten JSON:API items to (header, rows). `id` first, then the union
     of attribute keys in first-seen order."""

@@ -55,6 +55,9 @@
       </div>
     </header>
     {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+    {% if stale %}<div class="flash stale">Showing snapshot data from
+      <strong>{{ stale.taken_at | dtt }}</strong> — refreshing from Apple in the
+      background. <a href="{{ request.url.path }}">Reload</a> in a moment for live data.</div>{% endif %}
     {% block content %}{% endblock %}
   </main>
 </div>

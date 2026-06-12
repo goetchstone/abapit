@@ -83,6 +83,7 @@ def load() -> Config:
 def save(cfg: Config) -> None:
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
     data = {
         "active_org": cfg.active_org,
         "orgs": {key: org.to_dict() for key, org in cfg.orgs.items()},
@@ -127,6 +128,7 @@ def normalize_private_key(pem: str) -> str:
 def save_private_key(slug: str, pem: str) -> Path:
     """Write a pasted PEM to the keys dir with restrictive permissions."""
     keys_dir().mkdir(parents=True, exist_ok=True)
+    keys_dir().chmod(0o700)
     key_path = keys_dir() / f"{slug}.pem"
     key_path.write_text(pem.strip() + "\n")
     key_path.chmod(0o600)

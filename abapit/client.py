@@ -35,8 +35,9 @@ BUSINESS_SECTIONS = (
     "configurations",
     "audit_events",
     "changes",
+    "coverage",
 )
-SCHOOL_SECTIONS = ("devices", "mdm_servers", "changes")
+SCHOOL_SECTIONS = ("devices", "mdm_servers", "changes", "coverage")
 
 
 def sections_for(scope: str) -> tuple[str, ...]:

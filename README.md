@@ -66,6 +66,7 @@ or 401. Nothing is sent anywhere except `account.apple.com` and
 | Blueprints & Configurations | Blueprints with their attached apps/packages/configs *(Business only)* |
 | Audit Events | Org audit log with date-range and type filters *(Business only)* |
 | Changes | Snapshot-to-snapshot diffs: devices added/removed, MDM assignment moves, field-level attribute changes |
+| Coverage | AppleCare/warranty expiry report from the latest snapshot — "what expires in 30/60/90/180/365 days" plus devices with no active coverage; instant at any fleet size |
 | CSV everywhere | `/export/devices.csv`, `applecare.csv`, users, apps, … and the same via `abapit export` |
 
 Apple School Manager orgs see the device-related sections (that's what
@@ -94,11 +95,14 @@ history:
 0 7 * * 1  /usr/local/bin/abapit snapshot --keep 52
 ```
 
-Design rule: **live pages stay live.** The database is only read by
-explicitly historical features, so the GUI never silently shows stale data.
-The one optimization: `applecare.csv` is served instantly from the latest
-snapshot when one exists (it's the expensive one-call-per-device report);
-add `?live=1` to force a fresh pull.
+Design rule: **stale data is never silent.** Live pages serve live data;
+when snapshots exist they also enable **warm start** — on a cold cache the
+GUI renders instantly from the latest snapshot with a visible "snapshot data
+from <time> — refreshing in the background" banner while live data loads
+behind it. That's what makes a 20,000-device org open in milliseconds
+instead of a minute. The **Refresh** button always forces a true live fetch.
+`applecare.csv` is served from the latest snapshot when one exists (it's the
+expensive one-call-per-device report); add `?live=1` to force a fresh pull.
 
 The file is plain SQLite — query it directly with `sqlite3` or
 [Datasette](https://datasette.io); `devices_view` and `applecare_view` expose
@@ -115,6 +119,27 @@ abapit changes [--json]
 abapit token                             # print a bearer token for curl
 abapit orgs                              # list configured orgs
 ```
+
+## Security model
+
+- **Network**: binds `127.0.0.1` only by default. Requests with an
+  unrecognized `Host` header are rejected (blocks DNS-rebinding attacks),
+  and cross-origin browser POSTs are refused (blocks CSRF against the
+  settings/snapshot endpoints from malicious websites). Binding to anything
+  other than localhost disables Host checking and prints a loud warning —
+  the app deliberately has no login of its own.
+- **Credentials**: private keys are stored as separate files under
+  `~/.config/abapit/keys/` with `0600` permissions in a `0700` directory;
+  the config JSON holds only paths. Keys are validated and canonicalized at
+  add time. Bearer tokens live in memory only and are never logged.
+- **Data at rest**: the snapshot database (your full inventory) is
+  `0600` in a `0700` directory.
+- **Egress**: the only hosts ever contacted are `account.apple.com` and
+  `api-business.apple.com` / `api-school.apple.com`.
+- **Honest limits**: anything running as *your user* can read the key files
+  — the same trust model as `~/.ssh`. v1 is read-only, so a leaked abapit
+  key exposes inventory data but cannot modify your org; revoke/rotate keys
+  any time in Apple Business Manager.
 
 ## Notes & limits
 

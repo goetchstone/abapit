@@ -50,7 +50,10 @@ def cmd_serve(args) -> None:
     import uvicorn
     from .web.app import create_app
 
-    app = create_app(demo=args.demo)
+    # Host-header protection can only enumerate hosts we know; if the user
+    # deliberately binds wide, disable it (they get the warning below).
+    allowed_hosts = None if args.host in ("127.0.0.1", "localhost") else ["*"]
+    app = create_app(demo=args.demo, allowed_hosts=allowed_hosts)
     url = f"http://{args.host}:{args.port}"
     if not args.no_browser:
         threading.Timer(0.8, webbrowser.open, args=(url,)).start()
