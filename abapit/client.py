@@ -181,6 +181,9 @@ class ApiClient:
     def mdm_enrolled_devices(self) -> list[dict]:
         return self.list_all("mdmDevices")
 
+    def mdm_enrolled_device(self, device_id: str) -> dict:
+        return self.get(f"mdmDevices/{device_id}").get("data", {})
+
     def create_device_activity(self, activity_type: str, server_id: str,
                                serials: list[str]) -> dict:
         """Submit a batch assign/unassign. activity_type is ASSIGN_DEVICES
@@ -295,6 +298,11 @@ class ApiClient:
 
     def configurations(self) -> list[dict]:
         return self.list_all("configurations")
+
+    def configuration(self, configuration_id: str) -> dict:
+        """Single configuration — the only place Apple returns
+        customSettingsValues (it's null in the list response)."""
+        return self.get(f"configurations/{configuration_id}").get("data", {})
 
     # -- audit (Business API only) ---------------------------------------------
 

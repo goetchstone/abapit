@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% from "_macros.html" import attr_table %}
+{% block titletag %}{{ title }} · abapit{% endblock %}
+{% block title %}<a class="crumb" href="{{ back_href }}">{{ back_label }}</a> / {{ title }}{% endblock %}
+{% block content %}
+
+<div class="panels">
+  <section class="panel">
+    <h2>Details</h2>
+    {{ attr_table(plain_attrs) }}
+  </section>
+  {% if payload %}
+  <section class="panel wide">
+    <h2>{{ payload_label }}</h2>
+    <pre class="payload">{{ payload }}</pre>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

@@ -10,7 +10,7 @@
   <tbody>
   {% for d in items %}
   <tr>
-    <td>{{ d.attributes.get('serialNumber', d.id) }}</td>
+    <td><a href="/mdm-enrolled/{{ d.id }}">{{ d.attributes.get('serialNumber', d.id) }}</a></td>
     <td>{{ d.attributes.get('deviceName', '') }}</td>
     <td>{{ d.attributes.get('productFamily', '') }}</td>
     <td>{{ d.attributes.get('enrolledUserId') or '—' }}</td>

@@ -480,6 +480,32 @@ def create_app(demo: bool = False,
         return render(request, "configurations.html", active="configurations",
                       configurations=configurations)
 
+    @app.get("/configurations/{configuration_id}", response_class=HTMLResponse)
+    def configuration_page(request: Request, configuration_id: str):
+        guard("configurations")
+        item = cached(f"configuration:{configuration_id}",
+                      lambda c: c.configuration(configuration_id))
+        attrs = dict(item.get("attributes", {}))
+        payload = attrs.pop("customSettingsValues", None)
+        import json as _json
+        return render(request, "item_detail.html", active="configurations",
+                      title=attrs.get("name", configuration_id),
+                      back_href="/configurations", back_label="Configurations",
+                      plain_attrs=attrs,
+                      payload=_json.dumps(payload, indent=2) if payload else "",
+                      payload_label="Custom settings payload")
+
+    @app.get("/mdm-enrolled/{device_id}", response_class=HTMLResponse)
+    def mdm_enrolled_detail_page(request: Request, device_id: str):
+        guard("mdm_enrolled")
+        item = cached(f"mdm_enrolled:{device_id}",
+                      lambda c: c.mdm_enrolled_device(device_id))
+        return render(request, "item_detail.html", active="mdm_enrolled",
+                      title=item.get("attributes", {}).get("deviceName", device_id),
+                      back_href="/mdm-enrolled", back_label="Apple MDM Enrolled",
+                      plain_attrs=item.get("attributes", {}),
+                      payload="", payload_label="")
+
     @app.get("/audit-events", response_class=HTMLResponse)
     def audit_page(request: Request, start: str = "", end: str = "", type: str = ""):
         guard("audit_events")

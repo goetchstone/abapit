@@ -328,6 +328,24 @@ class DemoClient:
     def configurations(self) -> list[dict]:
         return self._configurations
 
+    def configuration(self, configuration_id: str) -> dict:
+        config = next((c for c in self._configurations
+                       if c["id"] == configuration_id), {})
+        if config:
+            config = {**config, "attributes": {
+                **config["attributes"],
+                "customSettingsValues": [{
+                    "payloadType": "com.apple.wifi.managed",
+                    "payloadContent": {"SSID_STR": "CorpNet",
+                                       "EncryptionType": "WPA3"},
+                }],
+            }}
+        return config
+
+    def mdm_enrolled_device(self, device_id: str) -> dict:
+        return next((d for d in self.mdm_enrolled_devices()
+                     if d["id"] == device_id), {})
+
     def audit_events(self, start_iso: str, end_iso: str, event_type: str = "") -> list[dict]:
         events = [e for e in self._audit_events
                   if start_iso <= e["attributes"]["eventDateTime"] <= end_iso]

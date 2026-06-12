@@ -8,7 +8,7 @@
   <tbody>
   {% for c in configurations %}
   <tr>
-    <td>{{ c.attributes.get('name', c.id) }}</td>
+    <td><a href="/configurations/{{ c.id }}">{{ c.attributes.get('name', c.id) }}</a></td>
     <td>{{ c.attributes.get('type', '') }}</td>
     <td>{{ c.attributes.get('configuredForPlatforms', []) | join(', ') | replace('PLATFORM_', '') }}</td>
     <td>{{ c.attributes.get('createdDateTime') | dt }}</td>

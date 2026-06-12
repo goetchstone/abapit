@@ -183,6 +183,22 @@ def test_warm_start_serves_snapshot_then_live(tmp_path, monkeypatch, ec_key_pair
     assert b"Showing snapshot data" not in second.content
 
 
+def test_configuration_detail_shows_custom_settings_payload(web):
+    config_id = web.app.state.demo_client.configurations()[0]["id"]
+    resp = web.get(f"/configurations/{config_id}")
+    assert resp.status_code == 200
+    # the payload only exists on the detail call — null in list responses
+    assert b"Custom settings payload" in resp.content
+    assert b"com.apple.wifi.managed" in resp.content
+
+
+def test_mdm_enrolled_detail_page(web):
+    device_id = web.app.state.demo_client.mdm_enrolled_devices()[0]["id"]
+    resp = web.get(f"/mdm-enrolled/{device_id}")
+    assert resp.status_code == 200
+    assert device_id.encode() in resp.content
+
+
 def test_find_unique_serial_jumps_to_device(web):
     serial = web.app.state.demo_client.devices()[0]["id"]
     resp = web.get(f"/find?q={serial}")
