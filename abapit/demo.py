@@ -263,6 +263,9 @@ class DemoClient:
             }})
         self._audit_events.sort(key=lambda e: e["attributes"]["eventDateTime"], reverse=True)
 
+        self._activities: dict[str, dict] = {}
+        self._activity_seq = 0
+
     # -- interface mirror of ApiClient -------------------------------------
 
     def devices(self) -> list[dict]:
@@ -331,6 +334,36 @@ class DemoClient:
         if event_type:
             events = [e for e in events if e["attributes"]["type"] == event_type]
         return events
+
+    def create_device_activity(self, activity_type: str, server_id: str,
+                               serials: list[str]) -> dict:
+        """Simulate Apple's async batch: apply the change immediately and
+        record a COMPLETED activity to poll."""
+        server = next((s for s in self._servers if s["id"] == server_id), None)
+        for serial in serials:
+            for assigned in self._assignments.values():
+                if serial in assigned:
+                    assigned.remove(serial)
+            self._assigned_server_of.pop(serial, None)
+            if activity_type == "ASSIGN_DEVICES" and server is not None:
+                self._assignments[server_id].append(serial)
+                self._assigned_server_of[serial] = server
+        self._activity_seq += 1
+        activity_id = f"demo-activity-{self._activity_seq}"
+        now = _iso(datetime.now(timezone.utc))
+        self._activities[activity_id] = {
+            "type": "orgDeviceActivities", "id": activity_id,
+            "attributes": {"status": "COMPLETED",
+                           "subStatus": "COMPLETED_WITH_SUCCESS",
+                           "createdDateTime": now, "completedDateTime": now,
+                           "downloadUrl": None},
+        }
+        return {"type": "orgDeviceActivities", "id": activity_id,
+                "attributes": {"status": "IN_PROGRESS", "subStatus": "SUBMITTED",
+                               "createdDateTime": now}}
+
+    def device_activity(self, activity_id: str) -> dict:
+        return self._activities.get(activity_id, {})
 
     def close(self) -> None:
         pass

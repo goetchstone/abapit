@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block titletag %}Assign to MDM · abapit{% endblock %}
+{% block title %}Assign Devices to MDM{% endblock %}
+{% block content %}
+
+{% if error %}<div class="flash stale">{{ error }}</div>{% endif %}
+
+<div class="panels">
+  <section class="panel wide">
+    <h2>1 · Choose devices and target</h2>
+    <p class="muted">Nothing is sent to Apple until you review the preview and confirm.
+    Tip: <a href="/assign?prefill=unassigned">prefill with all unassigned devices</a>.</p>
+    <form method="post" action="/assign" class="form-grid">
+      <label class="full">Serial numbers (paste from anywhere — spaces, commas, or one per line)
+        <textarea name="serials" rows="6" placeholder="C02XK1ZGJGH5&#10;F9FZX1ABPLJM">{{ serials }}</textarea>
+      </label>
+      <label>Action
+        <select name="action">
+          <option value="assign"{% if action == 'assign' %} selected{% endif %}>Assign to service</option>
+          <option value="unassign"{% if action == 'unassign' %} selected{% endif %}>Unassign from service</option>
+        </select>
+      </label>
+      <label>Device management service
+        <select name="server">
+          {% for s in servers %}
+          <option value="{{ s.id }}"{% if s.id == server %} selected{% endif %}>{{ s.attributes.get('serverName', s.id) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <input type="hidden" name="mode" value="preview">
+      <div class="full"><button class="btn primary">Preview (dry run)</button></div>
+    </form>
+  </section>
+
+  {% if plan %}
+  <section class="panel wide">
+    <h2>2 · Review</h2>
+    {% if plan.moves %}
+    <p><strong>{{ plan.moves | length }}</strong> device(s) will be
+      {{ 'assigned to' if plan.action == 'assign' else 'unassigned from' }}
+      <strong>{{ plan.server_name }}</strong>:</p>
+    <table>
+      <thead><tr><th>Serial</th><th>Model</th><th>Currently</th><th></th><th>After</th></tr></thead>
+      <tbody>
+      {% for m in plan.moves %}
+      <tr>
+        <td><a href="/devices/{{ m.serial }}">{{ m.serial }}</a></td>
+        <td>{{ m.model }}</td>
+        <td>{{ m.from_name }}</td>
+        <td>→</td>
+        <td>{{ plan.server_name if plan.action == 'assign' else '(unassigned)' }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Nothing to do — no requested device needs this change.</p>
+    {% endif %}
+
+    {% if plan.noops %}
+    <h2 class="spaced">Skipped ({{ plan.noops | length }})</h2>
+    <ul class="plain">
+      {% for n in plan.noops %}<li><code>{{ n.serial }}</code> <span class="muted">— {{ n.reason }}</span></li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if plan.unknown %}
+    <h2 class="spaced">Not found in this org ({{ plan.unknown | length }})</h2>
+    <div class="chips">{% for serial in plan.unknown %}<span class="chip">{{ serial }}</span>{% endfor %}</div>
+    {% endif %}
+
+    {% if plan.moves %}
+    <form method="post" action="/assign" class="spaced"
+          onsubmit="return confirm('Really {{ plan.action }} {{ plan.moves | length }} device(s) {{ 'to' if plan.action == 'assign' else 'from' }} {{ plan.server_name }}? This changes your org.')">
+      <input type="hidden" name="serials" value="{{ serials }}">
+      <input type="hidden" name="server" value="{{ plan.server_id }}">
+      <input type="hidden" name="action" value="{{ plan.action }}">
+      <input type="hidden" name="mode" value="execute">
+      <button class="btn primary">Confirm — {{ plan.action }} {{ plan.moves | length }} device(s)</button>
+    </form>
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

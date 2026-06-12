@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "abapit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Apple Business API Tool — a local web GUI for the Apple Business Manager and Apple School Manager APIs, built for Mac admins."
 readme = "README.md"
 license = { text = "MIT" }

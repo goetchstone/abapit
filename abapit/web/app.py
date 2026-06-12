@@ -24,6 +24,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .. import config, history
+from ..assign import plan as plan_assignment
 from ..auth import AuthError, token_cache
 from ..client import ApiClient, ApiError, sections_for
 from ..demo import DemoClient
@@ -39,6 +40,7 @@ NAV = [
         ("devices", "/devices", "Devices"),
         ("mdm_servers", "/mdm-servers", "MDM Servers"),
         ("mdm_enrolled", "/mdm-enrolled", "Apple MDM Enrolled"),
+        ("assign", "/assign", "Assign to MDM"),
     ]),
     ("People", [
         ("users", "/users", "Users"),
@@ -357,8 +359,10 @@ def create_app(demo: bool = False,
         device = c.device(device_id)
         coverage = c.device_applecare(device_id)
         server = c.device_assigned_server(device_id)
+        servers = cached("mdm_servers", lambda cc: cc.mdm_servers())
         return render(request, "device_detail.html", active="devices",
-                      device=device, coverage=coverage, server=server)
+                      device=device, coverage=coverage, server=server,
+                      servers=servers)
 
     @app.get("/mdm-servers", response_class=HTMLResponse)
     def mdm_servers_page(request: Request):
@@ -495,6 +499,70 @@ def create_app(demo: bool = False,
         if errors:
             msg += f". Skipped: {', '.join(errors)}"
         return RedirectResponse(f"/changes?msg={quote(msg)}", status_code=303)
+
+    # ---- assignment (the only write path) -----------------------------------
+
+    def _assignment_context():
+        devices = cached("devices", lambda c: c.devices())
+        servers = cached("mdm_servers", lambda c: c.mdm_servers())
+        server_ids = cached("server_device_ids", lambda c: {
+            s["id"]: c.mdm_server_device_ids(s["id"]) for s in servers})
+        return devices, servers, server_ids
+
+    @app.get("/assign", response_class=HTMLResponse)
+    def assign_page(request: Request, serials: str = "", server: str = "",
+                    action: str = "assign", prefill: str = ""):
+        guard("assign")
+        devices, servers, server_ids = _assignment_context()
+        if prefill == "unassigned":
+            summary = assignment_summary(devices, servers, server_ids)
+            serials = "\n".join(summary["unassigned"])
+        return render(request, "assign.html", active="assign", servers=servers,
+                      serials=serials, server=server, action=action,
+                      plan=None, error="")
+
+    @app.post("/assign", response_class=HTMLResponse)
+    def assign_submit(request: Request, serials: str = Form(""),
+                      server: str = Form(""), action: str = Form("assign"),
+                      mode: str = Form("preview")):
+        guard("assign")
+        c = client()
+        devices, servers, server_ids = _assignment_context()
+        try:
+            p = plan_assignment(serials, action, server, devices, servers, server_ids)
+        except ValueError as exc:
+            return render(request, "assign.html", active="assign",
+                          servers=servers, serials=serials, server=server,
+                          action=action, plan=None, error=str(exc))
+        if mode != "execute" or not p["moves"]:
+            return render(request, "assign.html", active="assign",
+                          servers=servers, serials=serials, server=server,
+                          action=action, plan=p, error="")
+        activity = c.create_device_activity(
+            "ASSIGN_DEVICES" if action == "assign" else "UNASSIGN_DEVICES",
+            server, [m["serial"] for m in p["moves"]])
+        # The org just changed: drop device/assignment caches and force the
+        # next loads live so the UI reflects reality, not the snapshot.
+        org_key = c.org.client_id
+        app.state.cache = {k: v for k, v in app.state.cache.items()
+                           if k[0] != org_key
+                           or k[1] not in ("devices", "server_device_ids")}
+        app.state.force_live[org_key] = time.time()
+        verb = "to" if action == "assign" else "from"
+        msg = (f"Submitted: {action} {len(p['moves'])} device(s) {verb} "
+               f"{p['server_name']}.")
+        return RedirectResponse(
+            f"/activities/{activity.get('id', '')}?msg={quote(msg)}",
+            status_code=303)
+
+    @app.get("/activities/{activity_id}", response_class=HTMLResponse)
+    def activity_page(request: Request, activity_id: str):
+        guard("assign")
+        activity = client().device_activity(activity_id)
+        attrs = activity.get("attributes", {}) if activity else {}
+        return render(request, "activity.html", active="assign",
+                      activity=activity, attrs=attrs,
+                      pending=attrs.get("status") == "IN_PROGRESS")
 
     # ---- coverage report ----------------------------------------------------
 

@@ -45,6 +45,52 @@ def test_same_origin_and_plain_posts_allowed(web):
     assert web.post("/refresh", data={"next": "/"}).status_code == 303  # curl-style
 
 
+# ---- assignment write flow -----------------------------------------------------
+
+def test_assign_preview_then_execute_demo(web):
+    demo = web.app.state.demo_client
+    serial = demo.devices()[0]["id"]
+    current = demo.device_assigned_server(serial)
+    target = next(s["id"] for s in demo.mdm_servers()
+                  if current is None or s["id"] != current["id"])
+
+    preview = web.post("/assign", data={
+        "serials": serial, "server": target, "action": "assign", "mode": "preview"})
+    assert preview.status_code == 200
+    assert serial.encode() in preview.content
+    assert b"Confirm" in preview.content
+    # preview must not change anything
+    assert serial not in demo.mdm_server_device_ids(target)
+
+    execute = web.post("/assign", data={
+        "serials": serial, "server": target, "action": "assign", "mode": "execute"})
+    assert execute.status_code == 303
+    location = execute.headers["location"]
+    assert "/activities/demo-activity-" in location
+
+    assert serial in demo.mdm_server_device_ids(target)  # the write happened
+    activity_id = location.split("?")[0].rsplit("/", 1)[1]
+    page = web.get(f"/activities/{activity_id}")
+    assert page.status_code == 200
+    assert b"COMPLETED" in page.content
+
+
+def test_assign_execute_with_nothing_to_do_does_not_submit(web):
+    demo = web.app.state.demo_client
+    serial = demo.devices()[1]["id"]
+    current = demo.device_assigned_server(serial)
+    if current is None:  # ensure it has a current server for the no-op case
+        target = demo.mdm_servers()[0]["id"]
+        demo.create_device_activity("ASSIGN_DEVICES", target, [serial])
+        current = demo.device_assigned_server(serial)
+    before = demo._activity_seq
+    resp = web.post("/assign", data={
+        "serials": serial, "server": current["id"], "action": "assign",
+        "mode": "execute"})
+    assert resp.status_code == 200  # rendered preview, no redirect
+    assert demo._activity_seq == before  # no activity created
+
+
 # ---- snapshot warm-start ------------------------------------------------------
 
 class StubFleet:

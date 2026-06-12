@@ -20,6 +20,20 @@
     {% else %}
       <p class="warn-text">Not assigned to any device management service.</p>
     {% endif %}
+    {% if 'assign' in allowed %}
+    <form method="post" action="/assign" class="toolbar">
+      <input type="hidden" name="serials" value="{{ device.id }}">
+      <input type="hidden" name="mode" value="preview">
+      <select name="server">
+        {% for s in servers %}<option value="{{ s.id }}">{{ s.attributes.get('serverName', s.id) }}</option>{% endfor %}
+      </select>
+      <select name="action">
+        <option value="assign">Assign to</option>
+        <option value="unassign">Unassign from</option>
+      </select>
+      <button class="btn small">Preview…</button>
+    </form>
+    {% endif %}
 
     <h2 class="spaced">AppleCare &amp; warranty</h2>
     {% for cov in coverage %}

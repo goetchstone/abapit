@@ -60,7 +60,8 @@
       </tbody>
     </table>
     {% if assignment.unassigned %}
-    <h2 class="spaced">Unassigned devices</h2>
+    <h2 class="spaced">Unassigned devices
+      <a class="more" href="/assign?prefill=unassigned">assign these →</a></h2>
     <div class="chips">
       {% for serial in assignment.unassigned[:30] %}
       <a class="chip" href="/devices/{{ serial }}">{{ serial }}</a>

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block head %}{% if pending %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block titletag %}Activity · abapit{% endblock %}
+{% block title %}Device Activity{% endblock %}
+{% block content %}
+
+{% if not activity %}
+<div class="panel"><p class="warn-text">Activity not found.</p>
+<p><a class="btn" href="/assign">← Back to assignment</a></p></div>
+{% else %}
+<div class="panel">
+  <h2>Activity <code>{{ activity.id }}</code></h2>
+  <p>
+    <span class="pill {{ 'success' if attrs.get('status') == 'COMPLETED' else '' }}">{{ attrs.get('status', '?') }}</span>
+    {% if attrs.get('subStatus') %}<span class="muted">{{ attrs.get('subStatus') }}</span>{% endif %}
+  </p>
+  <table class="kv">
+    <tbody>
+      <tr><th>Created</th><td>{{ attrs.get('createdDateTime') | dtt }}</td></tr>
+      <tr><th>Completed</th><td>{{ attrs.get('completedDateTime') | dtt if attrs.get('completedDateTime') else '—' }}</td></tr>
+    </tbody>
+  </table>
+  {% if pending %}
+  <p class="muted">Apple is processing the batch — this page refreshes every 5 seconds.</p>
+  {% else %}
+  <p class="muted">Done. Device lists refetch live on next view; Apple's listings can lag a batch by a moment.</p>
+  {% endif %}
+  {% if attrs.get('downloadUrl') %}
+  <p><a class="btn ghost" href="{{ attrs.get('downloadUrl') }}">Download Apple's result log</a></p>
+  {% endif %}
+  <p class="spaced">
+    <a class="btn" href="/assign">← Another assignment</a>
+    <a class="btn ghost" href="/devices">Devices</a>
+  </p>
+</div>
+{% endif %}
+{% endblock %}

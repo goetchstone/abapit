@@ -4,6 +4,7 @@
     abapit export <resource> [-o FILE] [--demo]       dump a resource as CSV
     abapit snapshot [--skip-applecare] [--keep N]     save org state to history.sqlite
     abapit changes [--json]                           diff the two latest snapshots
+    abapit assign --server X [--unassign] [--yes]     move devices between MDMs (dry-run by default)
     abapit token [--org SLUG]                         print a bearer token
     abapit orgs                                       list configured orgs
 """
@@ -14,9 +15,11 @@ import argparse
 import json
 import sys
 import threading
+import time
 import webbrowser
 
 from . import __version__, config, history
+from .assign import plan as plan_assignment
 from .auth import AuthError, request_access_token
 
 EXPORT_RESOURCES = {
@@ -129,6 +132,67 @@ def cmd_changes(args) -> None:
             print(f"  ~ {item['id']}  {fields}")
 
 
+def cmd_assign(args) -> None:
+    client = _client(args)
+    serial_text = " ".join(args.serial)
+    if args.file:
+        source = sys.stdin if args.file == "-" else open(args.file)
+        serial_text += " " + source.read()
+    if not serial_text.strip():
+        sys.exit("No serials given — use --serial, or --file (use '-' for stdin).")
+
+    servers = client.mdm_servers()
+    target = next(
+        (s for s in servers
+         if s["id"] == args.server
+         or s["attributes"].get("serverName", "").lower() == args.server.lower()),
+        None)
+    if target is None:
+        names = ", ".join(repr(s["attributes"].get("serverName", s["id"]))
+                          for s in servers)
+        sys.exit(f"No device management service matches {args.server!r}. "
+                 f"Known: {names}")
+
+    devices = client.devices()
+    server_ids = {s["id"]: client.mdm_server_device_ids(s["id"]) for s in servers}
+    action = "unassign" if args.unassign else "assign"
+    p = plan_assignment(serial_text, action, target["id"], devices, servers, server_ids)
+
+    for move in p["moves"]:
+        after = p["server_name"] if action == "assign" else "(unassigned)"
+        print(f"  ~ {move['serial']}  {move['from_name']} -> {after}")
+    for noop in p["noops"]:
+        print(f"  = {noop['serial']}  skipped: {noop['reason']}")
+    for serial in p["unknown"]:
+        print(f"  ? {serial}  not found in this org")
+    if not p["moves"]:
+        print("Nothing to do.")
+        return
+    if not args.yes:
+        print(f"\nDry run: would {action} {len(p['moves'])} device(s) "
+              f"{'to' if action == 'assign' else 'from'} {p['server_name']!r}. "
+              "Re-run with --yes to execute.")
+        return
+
+    activity = client.create_device_activity(
+        "ASSIGN_DEVICES" if action == "assign" else "UNASSIGN_DEVICES",
+        target["id"], [m["serial"] for m in p["moves"]])
+    activity_id = activity.get("id", "")
+    print(f"Submitted activity {activity_id}; waiting for Apple…")
+    attrs = activity.get("attributes", {})
+    for _ in range(60):
+        if attrs.get("status") not in ("", None, "IN_PROGRESS"):
+            break
+        time.sleep(5)
+        attrs = client.device_activity(activity_id).get("attributes", {})
+    print(f"{attrs.get('status', 'UNKNOWN')} "
+          f"({attrs.get('subStatus', '')}) at {attrs.get('completedDateTime', '?')}")
+    if attrs.get("downloadUrl"):
+        print(f"Result log: {attrs['downloadUrl']}")
+    if attrs.get("status") != "COMPLETED":
+        sys.exit(1)
+
+
 def cmd_token(args) -> None:
     cfg = config.load()
     slug = args.org or cfg.active_org
@@ -189,6 +253,22 @@ def main(argv: list[str] | None = None) -> None:
     p_changes.add_argument("--demo", action="store_true")
     p_changes.add_argument("--json", action="store_true", help="machine-readable output")
     p_changes.set_defaults(func=cmd_changes)
+
+    p_assign = sub.add_parser(
+        "assign", help="assign/unassign devices to an MDM service (dry-run unless --yes)")
+    p_assign.add_argument("--server", required=True,
+                          help="device management service, by name or id")
+    p_assign.add_argument("--serial", action="append", default=[],
+                          help="serial number (repeatable)")
+    p_assign.add_argument("--file", default="",
+                          help="file of serials, '-' for stdin")
+    p_assign.add_argument("--unassign", action="store_true",
+                          help="unassign from the service instead of assigning")
+    p_assign.add_argument("--yes", action="store_true",
+                          help="actually execute (default is a dry run)")
+    p_assign.add_argument("--org", default="", help="org slug (default: active org)")
+    p_assign.add_argument("--demo", action="store_true")
+    p_assign.set_defaults(func=cmd_assign)
 
     p_token = sub.add_parser("token", help="print a bearer token (for curl/scripts)")
     p_token.add_argument("--org", default="")

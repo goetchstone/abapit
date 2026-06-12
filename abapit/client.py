@@ -36,8 +36,9 @@ BUSINESS_SECTIONS = (
     "audit_events",
     "changes",
     "coverage",
+    "assign",
 )
-SCHOOL_SECTIONS = ("devices", "mdm_servers", "changes", "coverage")
+SCHOOL_SECTIONS = ("devices", "mdm_servers", "changes", "coverage", "assign")
 
 
 def sections_for(scope: str) -> tuple[str, ...]:
@@ -70,12 +71,14 @@ class ApiClient:
 
     # -- plumbing ---------------------------------------------------------
 
-    def _request(self, url: str, params: dict | None = None) -> dict:
+    def _request(self, url: str, params: dict | None = None,
+                 method: str = "GET", json_body: dict | None = None) -> dict:
         token = token_cache.get(self.org)
         refreshed = False
         for attempt in range(5):
-            resp = self._http.get(
-                url, params=params, headers={"Authorization": f"Bearer {token}"}
+            resp = self._http.request(
+                method, url, params=params, json=json_body,
+                headers={"Authorization": f"Bearer {token}"}
             )
             if resp.status_code == 401 and not refreshed:
                 # Token may have just expired; refresh once and retry.
@@ -85,7 +88,8 @@ class ApiClient:
                 continue
             if resp.status_code == 429 and attempt < 4:
                 # Rate limited — honor Retry-After, else back off exponentially.
-                # Matters most for bulk AppleCare lookups on large fleets.
+                # Safe for POSTs too: a 429 means Apple rejected the request
+                # before processing it.
                 try:
                     delay = float(resp.headers.get("Retry-After", ""))
                 except ValueError:
@@ -149,6 +153,25 @@ class ApiClient:
 
     def mdm_enrolled_devices(self) -> list[dict]:
         return self.list_all("mdmDevices")
+
+    def create_device_activity(self, activity_type: str, server_id: str,
+                               serials: list[str]) -> dict:
+        """Submit a batch assign/unassign. activity_type is ASSIGN_DEVICES
+        or UNASSIGN_DEVICES. Returns the created activity (id + status)."""
+        body = {"data": {
+            "type": "orgDeviceActivities",
+            "attributes": {"activityType": activity_type},
+            "relationships": {
+                "mdmServer": {"data": {"type": "mdmServers", "id": server_id}},
+                "devices": {"data": [{"type": "orgDevices", "id": serial}
+                                     for serial in serials]},
+            },
+        }}
+        return self._request(f"{self.base_url}/v1/orgDeviceActivities",
+                             method="POST", json_body=body).get("data", {})
+
+    def device_activity(self, activity_id: str) -> dict:
+        return self.get(f"orgDeviceActivities/{activity_id}").get("data", {})
 
     # -- people (Business API only) -----------------------------------------
 

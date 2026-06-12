@@ -60,6 +60,7 @@ or 401. Nothing is sent anywhere except `account.apple.com` and
 | Dashboard | Fleet counts, devices added per month, product family/status breakdowns, devices per MDM server, **devices not assigned to any MDM**, recent audit events |
 | Devices | Searchable inventory, per-device detail incl. **AppleCare/warranty coverage** and assigned MDM server |
 | MDM Servers | Device management services with assigned-device lists |
+| Assign to MDM | The one write: move devices between MDM services — paste serials (or prefill all unassigned), **dry-run preview** of exactly what changes, explicit confirm, then live tracking of Apple's batch activity |
 | Apple MDM Enrolled | Devices enrolled in Apple's built-in MDM |
 | Users & User Groups | Managed Apple Accounts, group membership *(Business only)* |
 | Apps & Packages | VPP/custom apps and packages *(Business only)* |
@@ -116,6 +117,8 @@ abapit export devices -o devices.csv     # any resource: users, apps, blueprints
 abapit export devices --demo | head      # works against demo data too
 abapit snapshot [--skip-applecare] [--keep N]
 abapit changes [--json]
+abapit assign --server "Jamf Pro" --file serials.txt          # DRY RUN: prints the plan
+abapit assign --server "Jamf Pro" --file serials.txt --yes    # executes, tracks to completion
 abapit token                             # print a bearer token for curl
 abapit orgs                              # list configured orgs
 ```
@@ -137,15 +140,17 @@ abapit orgs                              # list configured orgs
 - **Egress**: the only hosts ever contacted are `account.apple.com` and
   `api-business.apple.com` / `api-school.apple.com`.
 - **Honest limits**: anything running as *your user* can read the key files
-  — the same trust model as `~/.ssh`. v1 is read-only, so a leaked abapit
-  key exposes inventory data but cannot modify your org; revoke/rotate keys
-  any time in Apple Business Manager.
+  — the same trust model as `~/.ssh`. The API account can read inventory
+  and reassign devices between MDM services (the tool's only write);
+  revoke/rotate keys any time in Apple Business Manager.
 
 ## Notes & limits
 
-- **v1 is read-only.** Nothing in this tool can change or break your org.
-  Roadmap: device→MDM assignment via `orgDeviceActivities` (with explicit
-  confirmations), then blueprint/configuration CRUD.
+- **The only write is device↔MDM assignment**, and it never fires blind:
+  every run is planned first (unknown serials and no-ops are filtered out
+  and shown), the dry-run preview is the default everywhere, and execution
+  requires an explicit confirm (web) or `--yes` (CLI). Everything else is
+  read-only. Roadmap: blueprint/configuration CRUD.
 - Responses are cached in memory for 5 minutes per org (the **Refresh**
   button clears it) to stay friendly with Apple's rate limits; 429s are
   retried automatically with backoff, honoring `Retry-After`.
