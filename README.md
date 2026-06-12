@@ -19,11 +19,13 @@ one-click CSV exports.
 Needs Python 3.10+ (`brew install python` if your Mac doesn't have it).
 
 ```sh
-pipx install git+https://github.com/goetchstone/abapit
-abapit serve --demo        # full UI with a fake fleet — kick the tires
+git clone https://github.com/goetchstone/abapit && cd abapit
+python3 -m venv .venv && .venv/bin/pip install -e .
+.venv/bin/abapit serve --demo   # full UI with a fake fleet — kick the tires
 ```
 
-(PyPI release coming; then it's just `pipx install abapit`.)
+Or as a one-liner without cloning, if you have pipx:
+`pipx install git+https://github.com/goetchstone/abapit`
 
 ## Connecting your real org
 
