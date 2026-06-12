@@ -91,6 +91,39 @@ def save(cfg: Config) -> None:
     path.chmod(0o600)
 
 
+def normalize_private_key(pem: str) -> str:
+    """Validate a private key and fix common wrapper problems.
+
+    Keys generated for AxM API accounts sometimes arrive with CRLF line
+    endings or a PKCS#8 body mislabeled with SEC1 'EC PRIVATE KEY' headers
+    (OpenSSL tolerates the mismatch; the cryptography library does not).
+    Returns a canonical PKCS#8 PEM, or raises ValueError if unusable.
+    """
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding, NoEncryption, PrivateFormat, load_pem_private_key)
+
+    text = pem.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
+    candidates = [text]
+    if "BEGIN EC PRIVATE KEY" in text:
+        candidates.append(text.replace("BEGIN EC PRIVATE KEY", "BEGIN PRIVATE KEY")
+                              .replace("END EC PRIVATE KEY", "END PRIVATE KEY"))
+    elif "BEGIN PRIVATE KEY" in text:
+        candidates.append(text.replace("BEGIN PRIVATE KEY", "BEGIN EC PRIVATE KEY")
+                              .replace("END PRIVATE KEY", "END EC PRIVATE KEY"))
+
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            key = load_pem_private_key(candidate.encode(), password=None)
+            return key.private_bytes(
+                Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode()
+        except (ValueError, TypeError) as exc:
+            last_error = exc
+    raise ValueError(
+        f"not a usable private key ({last_error}). Expected the PEM private "
+        "key generated for your Apple Business/School Manager API account.")
+
+
 def save_private_key(slug: str, pem: str) -> Path:
     """Write a pasted PEM to the keys dir with restrictive permissions."""
     keys_dir().mkdir(parents=True, exist_ok=True)
@@ -115,6 +148,12 @@ def add_org(
     if not private_key_pem and not private_key_path:
         raise ValueError("provide either a pasted private key or a path to one")
 
+    if not private_key_pem:
+        try:
+            private_key_pem = Path(private_key_path).expanduser().read_text()
+        except OSError as exc:
+            raise ValueError(f"could not read key file: {exc}") from exc
+
     cfg = load()
     slug = slugify(name)
     base, n = slug, 2
@@ -122,8 +161,8 @@ def add_org(
         slug = f"{base}-{n}"
         n += 1
 
-    if private_key_pem:
-        private_key_path = str(save_private_key(slug, private_key_pem))
+    # Always store our own validated, normalized copy with 0600 perms.
+    private_key_path = str(save_private_key(slug, normalize_private_key(private_key_pem)))
 
     cfg.orgs[slug] = Org(
         name=name,
