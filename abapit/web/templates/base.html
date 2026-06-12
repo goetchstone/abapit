@@ -25,7 +25,7 @@
       <div class="nav-title">{{ group }}</div>
       {% for key, href, label in items %}
       {% if key in denied %}
-      <span class="nav-link locked" title="Denied for this key's role (probed {{ probed_at | dt }}). Edit the API account's role in ABM/ASM or switch profile.">{{ label }} &#128274;</span>
+      <span class="nav-link locked" title="Denied for this key's role when last probed ({{ probed_at | dt }}). If the role changed in ABM/ASM since, click re-check below.">{{ label }} &#128274;</span>
       {% else %}
       <a class="nav-link{% if active == key %} on{% endif %}" href="{{ href }}">{{ label }}</a>
       {% endif %}
@@ -36,6 +36,13 @@
       <div class="nav-title">System</div>
       <a class="nav-link{% if active == 'settings' %} on{% endif %}" href="/settings">Settings</a>
     </div>
+    {% if denied and not demo %}
+    <form method="post" action="/settings/orgs/{{ active_org }}/probe">
+      <button class="btn small ghost relock"
+              title="Locks reflect the last probe — re-check after changing the role in ABM/ASM">
+        &#128274; {{ denied | length }} locked &middot; re-check</button>
+    </form>
+    {% endif %}
   </aside>
   <main>
     <header class="topbar">

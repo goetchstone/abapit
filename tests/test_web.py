@@ -115,6 +115,7 @@ def test_denied_sections_lock_navigation(tmp_path, monkeypatch, ec_key_pair):
     assert b'href="/users"' not in resp.content   # locked: a span, not a link
     assert b'href="/apps"' not in resp.content
     assert b'href="/mdm-servers"' in resp.content  # un-probed stays clickable
+    assert b"re-check" in resp.content            # one-click re-probe affordance
 
 
 # ---- snapshot warm-start ------------------------------------------------------
