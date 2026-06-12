@@ -367,10 +367,11 @@ class DemoClient:
 
     def probe_capabilities(self) -> list[dict]:
         from .client import ApiClient
-        results = [{"capability": label, "kind": "read", "status": "ok"}
-                   for label, _, _, business_only in ApiClient.READ_PROBES]
-        results.append({"capability": "Device assignment", "kind": "write",
-                        "status": "ok"})
+        results = [{"section": section, "capability": label, "kind": "read",
+                    "status": "ok"}
+                   for section, label, _, _, _ in ApiClient.READ_PROBES]
+        results.append({"section": "assign", "capability": "Device assignment",
+                        "kind": "write", "status": "ok"})
         return results
 
     def close(self) -> None:

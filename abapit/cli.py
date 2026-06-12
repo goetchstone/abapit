@@ -195,11 +195,21 @@ def cmd_assign(args) -> None:
 
 def cmd_probe(args) -> None:
     client = _client(args)
+    if not getattr(args, "demo", False):
+        from .auth import token_cache
+        token_cache.invalidate(client.org)  # role edits need a fresh token
     print(f"Key capabilities for {client.org.name} ({client.org.scope}) — "
           "probed empirically; Apple has no permissions API:")
-    for result in client.probe_capabilities():
+    results = client.probe_capabilities()
+    for result in results:
         mark = {"ok": "+", "forbidden": "x"}.get(result["status"], "?")
         print(f"  {mark} {result['capability']:22s} {result['kind']:6s} {result['status']}")
+    if not getattr(args, "demo", False):
+        cfg = config.load()
+        slug = args.org or cfg.active_org
+        if slug in cfg.orgs:
+            config.update_org_capabilities(
+                slug, {r["section"]: r["status"] for r in results})
     print("Permissions come from the API account's role in ABM/ASM "
           "(Access Management > Roles). Edit the role there, or add a second "
           "API account as another org profile for tiered access.")
@@ -225,7 +235,8 @@ def cmd_orgs(args) -> None:
         return
     for slug, org in cfg.orgs.items():
         marker = "*" if slug == cfg.active_org else " "
-        print(f"{marker} {slug:20s} {org.scope:8s} {org.name}")
+        role = f"  [{org.role}]" if org.role else ""
+        print(f"{marker} {slug:20s} {org.scope:8s} {org.name}{role}")
 
 
 def main(argv: list[str] | None = None) -> None:

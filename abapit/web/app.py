@@ -235,9 +235,12 @@ def create_app(demo: bool = False,
         nav = [(group, [item for item in items if item[0] in allowed or item[0] == "dashboard"])
                for group, items in NAV]
         nav = [(group, items) for group, items in nav if items]
+        denied = c.org.denied_sections() if c and not c.is_demo else set()
         return templates.TemplateResponse(request, template, {
             "active": active,
             "nav": nav,
+            "denied": denied,
+            "probed_at": c.org.probed_at if c and not c.is_demo else "",
             "stale": _stale_ctx.get(),
             "demo": app.state.demo,
             "org": c.org if c else None,
@@ -672,17 +675,19 @@ def create_app(demo: bool = False,
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request):
         return render(request, "settings.html", active="settings",
-                      config_path=str(config.config_path()))
+                      config_path=str(config.config_path()),
+                      suggested_roles=config.SUGGESTED_ROLES)
 
     @app.post("/settings/orgs")
     def settings_add(name: str = Form(...), scope: str = Form(...),
                      client_id: str = Form(...), key_id: str = Form(...),
-                     pem: str = Form(""), key_path: str = Form("")):
+                     pem: str = Form(""), key_path: str = Form(""),
+                     role: str = Form("")):
         try:
             config.add_org(name=name, scope=scope, client_id=client_id,
                            key_id=key_id, private_key_pem=pem.strip(),
-                           private_key_path=key_path.strip())
-            msg = f"Added org {name!r}."
+                           private_key_path=key_path.strip(), role=role)
+            msg = f"Added org {name!r}. Click Permissions to map what this key's role allows."
         except ValueError as exc:
             msg = f"Could not add org: {exc}"
         return RedirectResponse(f"/settings?msg={quote(msg)}", status_code=303)
@@ -711,8 +716,14 @@ def create_app(demo: bool = False,
             if org is None:
                 return RedirectResponse(
                     f"/settings?msg={quote('Org not found.')}", status_code=303)
+            # Mint a fresh token: a role edited in ABM moments ago may not be
+            # reflected in a cached bearer token.
+            token_cache.invalidate(org)
             probe_client = ApiClient(org)
         results = probe_client.probe_capabilities()
+        if not (app.state.demo and slug == "demo"):
+            config.update_org_capabilities(
+                slug, {r["section"]: r["status"] for r in results})
         return render(request, "probe.html", active="settings",
                       results=results, probed_org=probe_client.org)
 

@@ -91,6 +91,32 @@ def test_assign_execute_with_nothing_to_do_does_not_submit(web):
     assert demo._activity_seq == before  # no activity created
 
 
+# ---- role-based navigation gating ----------------------------------------------
+
+def test_denied_sections_lock_navigation(tmp_path, monkeypatch, ec_key_pair):
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("ABAPIT_DATA_DIR", str(tmp_path / "data"))
+    key_path, _ = ec_key_pair
+    slug = config.add_org(name="Locked Org", scope="business",
+                          client_id="BUSINESSAPI.locked", key_id="k",
+                          private_key_path=str(key_path),
+                          role="Device Enrollment Manager")
+    config.update_org_capabilities(
+        slug, {"devices": "ok", "users": "forbidden", "apps": "forbidden"})
+
+    import abapit.web.app as app_mod
+    monkeypatch.setattr(app_mod, "ApiClient",
+                        lambda org: StubFleet([_device("AAA")], org=org))
+    client = TestClient(create_app(), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    resp = client.get("/devices")
+    assert resp.status_code == 200
+    assert b"nav-link locked" in resp.content
+    assert b'href="/users"' not in resp.content   # locked: a span, not a link
+    assert b'href="/apps"' not in resp.content
+    assert b'href="/mdm-servers"' in resp.content  # un-probed stays clickable
+
+
 # ---- snapshot warm-start ------------------------------------------------------
 
 class StubFleet:

@@ -16,15 +16,18 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
     <h2>Organizations</h2>
     {% if orgs %}
     <table>
-      <thead><tr><th></th><th>Name</th><th>Scope</th><th>Client ID</th><th>Key</th><th></th></tr></thead>
+      <thead><tr><th></th><th>Name</th><th>Role</th><th>Scope</th><th>Client ID</th><th>Key access</th><th></th></tr></thead>
       <tbody>
       {% for slug, o in orgs.items() %}
       <tr>
         <td>{% if slug == active_org %}<span class="pill active">active</span>{% endif %}</td>
         <td>{{ o.name }}</td>
+        <td>{{ o.role or '—' }}</td>
         <td>{{ o.scope }}</td>
         <td><code>{{ o.client_id[:24] }}{% if o.client_id | length > 24 %}…{% endif %}</code></td>
-        <td><code>{{ o.private_key_path }}</code></td>
+        <td>{% if o.probed_at %}{{ o.capabilities.values() | select('equalto', 'ok') | list | length }}/{{ o.capabilities | length }} allowed
+            <span class="muted">({{ o.probed_at | dt }})</span>
+            {% else %}<span class="muted">not probed</span>{% endif %}</td>
         <td class="row-actions">
           {% if slug != active_org %}
           <form method="post" action="/settings/orgs/{{ slug }}/activate"><button class="btn small">Use</button></form>
@@ -60,6 +63,12 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
       </label>
       <label>Client ID <input name="client_id" required placeholder="BUSINESSAPI.xxxxxxxx-…"></label>
       <label>Key ID <input name="key_id" required placeholder="xxxxxxxx-xxxx-…"></label>
+      <label>API account's role <span class="muted">(bookkeeping — the Permissions probe is the truth)</span>
+        <input name="role" list="role-suggestions" placeholder="Device Enrollment Manager">
+        <datalist id="role-suggestions">
+          {% for r in suggested_roles %}<option value="{{ r }}">{% endfor %}
+        </datalist>
+      </label>
       <label class="full">Private key (paste PEM)
         <textarea name="pem" rows="5" placeholder="-----BEGIN EC PRIVATE KEY-----&#10;…&#10;-----END EC PRIVATE KEY-----"></textarea>
       </label>

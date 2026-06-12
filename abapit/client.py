@@ -177,17 +177,17 @@ class ApiClient:
     # -- capability probe ------------------------------------------------------
 
     READ_PROBES = (
-        # (label, path, params, business_only)
-        ("Devices", "orgDevices", {"limit": 1}, False),
-        ("MDM servers", "mdmServers", {"limit": 1}, False),
-        ("Apple MDM enrolled", "mdmDevices", {"limit": 1}, True),
-        ("Users", "users", {"limit": 1}, True),
-        ("User groups", "userGroups", {"limit": 1}, True),
-        ("Apps", "apps", {"limit": 1}, True),
-        ("Packages", "packages", {"limit": 1}, True),
-        ("Blueprints", "blueprints", {"limit": 1}, True),
-        ("Configurations", "configurations", {"limit": 1}, True),
-        ("Audit events", "auditEvents", None, True),  # params filled at runtime
+        # (section key, label, path, params, business_only)
+        ("devices", "Devices", "orgDevices", {"limit": 1}, False),
+        ("mdm_servers", "MDM servers", "mdmServers", {"limit": 1}, False),
+        ("mdm_enrolled", "Apple MDM enrolled", "mdmDevices", {"limit": 1}, True),
+        ("users", "Users", "users", {"limit": 1}, True),
+        ("user_groups", "User groups", "userGroups", {"limit": 1}, True),
+        ("apps", "Apps", "apps", {"limit": 1}, True),
+        ("packages", "Packages", "packages", {"limit": 1}, True),
+        ("blueprints", "Blueprints", "blueprints", {"limit": 1}, True),
+        ("configurations", "Configurations", "configurations", {"limit": 1}, True),
+        ("audit_events", "Audit events", "auditEvents", None, True),  # params at runtime
     )
 
     def probe_capabilities(self) -> list[dict]:
@@ -202,7 +202,7 @@ class ApiClient:
         """
         now = datetime.now(timezone.utc)
         results = []
-        for label, path, params, business_only in self.READ_PROBES:
+        for section, label, path, params, business_only in self.READ_PROBES:
             if business_only and self.org.scope != "business":
                 continue
             if path == "auditEvents":
@@ -216,7 +216,8 @@ class ApiClient:
                 status = "ok"
             except ApiError as exc:
                 status = "forbidden" if exc.status == 403 else f"error {exc.status}"
-            results.append({"capability": label, "kind": "read", "status": status})
+            results.append({"section": section, "capability": label,
+                            "kind": "read", "status": status})
 
         try:
             self.create_device_activity("ASSIGN_DEVICES",
@@ -229,8 +230,8 @@ class ApiClient:
                 status = "ok"  # request was validated, so the role allows writes
             else:
                 status = f"error {exc.status}"
-        results.append({"capability": "Device assignment", "kind": "write",
-                        "status": status})
+        results.append({"section": "assign", "capability": "Device assignment",
+                        "kind": "write", "status": status})
         return results
 
     # -- people (Business API only) -----------------------------------------

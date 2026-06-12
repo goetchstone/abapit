@@ -24,7 +24,11 @@
     <div class="nav-group">
       <div class="nav-title">{{ group }}</div>
       {% for key, href, label in items %}
+      {% if key in denied %}
+      <span class="nav-link locked" title="Denied for this key's role (probed {{ probed_at | dt }}). Edit the API account's role in ABM/ASM or switch profile.">{{ label }} &#128274;</span>
+      {% else %}
       <a class="nav-link{% if active == key %} on{% endif %}" href="{{ href }}">{{ label }}</a>
+      {% endif %}
       {% endfor %}
     </div>
     {% endfor %}
@@ -44,7 +48,7 @@
         <form method="post" id="orgswitch">
           <select onchange="orgswitch.action='/settings/orgs/'+this.value+'/activate';orgswitch.submit()">
             {% for slug, o in orgs.items() %}
-            <option value="{{ slug }}"{% if slug == active_org %} selected{% endif %}>{{ o.name }}</option>
+            <option value="{{ slug }}"{% if slug == active_org %} selected{% endif %}>{{ o.name }}{% if o.role %} · {{ o.role }}{% endif %}</option>
             {% endfor %}
           </select>
         </form>

@@ -67,6 +67,7 @@ code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; 
 }
 .nav-link:hover { background: rgba(255,255,255,0.08); text-decoration: none; }
 .nav-link.on { background: var(--accent); color: #fff; }
+.nav-link.locked { opacity: 0.4; cursor: not-allowed; }
 
 /* ---- main / topbar ---- */
 main { flex: 1; padding: 22px 28px 48px; min-width: 0; }

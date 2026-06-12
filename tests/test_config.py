@@ -42,6 +42,20 @@ def test_add_load_activate_remove(tmp_path, monkeypatch, pem):
     assert not (tmp_path / "keys" / f"{slug2}.pem").exists()
 
 
+def test_role_and_capabilities_round_trip(tmp_path, monkeypatch, pem):
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path))
+    slug = config.add_org(name="Roled", scope="business", client_id="x",
+                          key_id="k", private_key_pem=pem,
+                          role="Device Enrollment Manager")
+    assert config.load().orgs[slug].role == "Device Enrollment Manager"
+
+    config.update_org_capabilities(slug, {"devices": "ok", "users": "forbidden"})
+    org = config.load().orgs[slug]
+    assert org.capabilities == {"devices": "ok", "users": "forbidden"}
+    assert org.probed_at
+    assert org.denied_sections() == {"users"}
+
+
 def test_duplicate_names_get_unique_slugs(tmp_path, monkeypatch, pem):
     monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path))
     a = config.add_org(name="Acme", scope="business", client_id="x",

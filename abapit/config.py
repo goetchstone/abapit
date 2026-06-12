@@ -12,7 +12,19 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+
+# Common ABM/ASM role names, offered as suggestions only — orgs can define
+# custom roles, and the capability probe is always the source of truth.
+SUGGESTED_ROLES = (
+    "Administrator",
+    "IT Administrator",
+    "Device Enrollment Manager",
+    "People Manager",
+    "Content Manager",
+    "Custom",
+)
 
 
 def config_dir() -> Path:
@@ -38,10 +50,17 @@ class Org:
     key_id: str
     private_key_path: str
     team_id: str = ""  # defaults to client_id when empty
+    role: str = ""  # the API account's ABM/ASM role — bookkeeping only
+    capabilities: dict = field(default_factory=dict)  # section -> probe status
+    probed_at: str = ""
 
     @property
     def issuer(self) -> str:
         return self.team_id or self.client_id
+
+    def denied_sections(self) -> set:
+        return {section for section, status in self.capabilities.items()
+                if status == "forbidden"}
 
     def private_key(self) -> str:
         return Path(self.private_key_path).expanduser().read_text()
@@ -54,6 +73,9 @@ class Org:
             "key_id": self.key_id,
             "private_key_path": self.private_key_path,
             "team_id": self.team_id,
+            "role": self.role,
+            "capabilities": self.capabilities,
+            "probed_at": self.probed_at,
         }
 
 
@@ -135,6 +157,17 @@ def save_private_key(slug: str, pem: str) -> Path:
     return key_path
 
 
+def update_org_capabilities(slug: str, capabilities: dict) -> None:
+    """Persist a probe result so the UI can gate navigation per key."""
+    cfg = load()
+    org = cfg.orgs.get(slug)
+    if org is None:
+        return
+    org.capabilities = capabilities
+    org.probed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    save(cfg)
+
+
 def add_org(
     name: str,
     scope: str,
@@ -143,6 +176,7 @@ def add_org(
     private_key_pem: str = "",
     private_key_path: str = "",
     team_id: str = "",
+    role: str = "",
 ) -> str:
     """Add an org profile and make it active if it is the first one."""
     if scope not in ("business", "school"):
@@ -173,6 +207,7 @@ def add_org(
         key_id=key_id.strip(),
         private_key_path=private_key_path,
         team_id=team_id.strip(),
+        role=role.strip(),
     )
     if not cfg.active_org:
         cfg.active_org = slug
