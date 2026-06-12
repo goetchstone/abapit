@@ -215,6 +215,33 @@ def create_app(demo: bool = False) -> FastAPI:
                       q=q, family=family, status=status,
                       families=families, statuses=statuses)
 
+    @app.get("/find")
+    def find_device(q: str = ""):
+        """Global quick-find: jump straight to a device when the query
+        uniquely identifies one (serial, IMEI, MEID, EID, order number,
+        MAC address — exact or unique-substring); otherwise fall back to
+        the filtered device list."""
+        q = q.strip()
+        if not q:
+            return RedirectResponse("/devices", status_code=303)
+        devices = cached("devices", lambda c: c.devices())
+        needle = q.lower()
+        id_fields = ("serialNumber", "imei", "meid", "eid", "orderNumber",
+                     "wifiMacAddress", "bluetoothMacAddress", "ethernetMacAddress")
+
+        def identifiers(device):
+            yield device.get("id") or ""
+            for field in id_fields:
+                yield str(device["attributes"].get(field) or "")
+
+        exact = [d for d in devices
+                 if any(value.lower() == needle for value in identifiers(d))]
+        hits = exact or [d for d in devices
+                         if any(needle in value.lower() for value in identifiers(d))]
+        if len(hits) == 1:
+            return RedirectResponse(f"/devices/{hits[0]['id']}", status_code=303)
+        return RedirectResponse(f"/devices?q={quote(q)}", status_code=303)
+
     @app.get("/devices/{device_id}", response_class=HTMLResponse)
     def device_page(request: Request, device_id: str):
         c = client()

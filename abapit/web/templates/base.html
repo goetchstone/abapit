@@ -36,6 +36,9 @@
     <header class="topbar">
       <h1>{% block title %}{% endblock %}</h1>
       <div class="actions">
+        <form method="get" action="/find">
+          <input type="search" name="q" placeholder="Find device: serial, IMEI, order #" title="Jumps straight to the device when the match is unique">
+        </form>
         {% if not demo and orgs|length > 1 %}
         <form method="post" id="orgswitch">
           <select onchange="orgswitch.action='/settings/orgs/'+this.value+'/activate';orgswitch.submit()">
