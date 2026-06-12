@@ -16,10 +16,14 @@ one-click CSV exports.
 
 ## Quick start (no credentials needed)
 
+Needs Python 3.10+ (`brew install python` if your Mac doesn't have it).
+
 ```sh
-pipx install abapit        # or: uvx abapit, or pip install in a venv
+pipx install git+https://github.com/goetchstone/abapit
 abapit serve --demo        # full UI with a fake fleet — kick the tires
 ```
+
+(PyPI release coming; then it's just `pipx install abapit`.)
 
 ## Connecting your real org
 

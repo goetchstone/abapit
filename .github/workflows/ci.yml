@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e '.[dev]'
+      - run: pytest
+      - name: Demo smoke test
+        run: |
+          abapit export devices --demo | head -1 | grep serialNumber
+          abapit changes --demo 2>&1 | grep -q "Need at least two snapshots"
+        env:
+          ABAPIT_DATA_DIR: ${{ runner.temp }}/abapit-data
