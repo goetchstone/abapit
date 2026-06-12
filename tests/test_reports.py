@@ -29,6 +29,39 @@ def test_csv_export_neutralizes_formula_injection():
     assert ",OK" in body  # normal values untouched
 
 
+def test_fleet_age_report_buckets_and_candidates():
+    from abapit.reports import fleet_age_report
+
+    def aged(serial, years_old):
+        ordered = (NOW - timedelta(days=int(years_old * 365.25))).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        return {"type": "orgDevices", "id": serial,
+                "attributes": {"serialNumber": serial, "orderDateTime": ordered,
+                               "deviceModel": "Mac", "productFamily": "Mac"}}
+
+    devices = [aged("NEW", 0.5), aged("MID", 2.5), aged("OLD", 4.5),
+               aged("ANCIENT", 6.0),
+               {"type": "orgDevices", "id": "NODATE", "attributes": {}}]
+    coverage = [cov("OLD", "ACTIVE", end_days=100)]
+
+    report = fleet_age_report(devices, coverage, years=4, now=NOW)
+
+    assert dict(report["buckets"])["< 1 yr"] == 1
+    assert dict(report["buckets"])["2–3 yrs"] == 1
+    assert dict(report["buckets"])["4+ yrs"] == 2
+    assert [c["serial"] for c in report["candidates"]] == ["ANCIENT", "OLD"]
+    assert report["candidates"][0]["covered"] is False
+    assert report["candidates"][1]["covered"] is True
+    assert report["uncovered_candidates"] == 1
+    assert report["undated"] == 1
+
+    # without coverage data, the column is honestly unknown
+    no_cov = fleet_age_report(devices, None, years=4, now=NOW)
+    assert no_cov["has_coverage_data"] is False
+    assert no_cov["candidates"][0]["covered"] is None
+    assert no_cov["uncovered_candidates"] is None
+
+
 def test_coverage_report_buckets():
     items = [
         cov("D1", "ACTIVE", end_days=10),     # expiring soon

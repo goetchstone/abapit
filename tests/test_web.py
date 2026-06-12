@@ -17,7 +17,8 @@ def web():
 
 def test_pages_render(web):
     for path in ("/", "/devices", "/mdm-servers", "/users", "/blueprints",
-                 "/settings", "/audit-events", "/reports/coverage"):
+                 "/settings", "/audit-events", "/reports/coverage",
+                 "/reports/fleet-age"):
         assert web.get(path).status_code == 200, path
 
 

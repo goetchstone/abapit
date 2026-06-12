@@ -29,7 +29,8 @@ from ..auth import AuthError, token_cache
 from ..client import ApiClient, ApiError, sections_for
 from ..demo import DemoClient
 from ..reports import (assignment_summary, coverage_report, device_stats,
-                       items_to_csv, items_to_rows, parse_iso)
+                       fleet_age_report, items_to_csv, items_to_rows,
+                       parse_iso)
 
 CACHE_TTL = 300  # seconds
 MAX_TABLE_ROWS = 500
@@ -56,7 +57,10 @@ NAV = [
         ("audit_events", "/audit-events", "Audit Events"),
         ("changes", "/changes", "Changes"),
     ]),
-    ("Reports", [("coverage", "/reports/coverage", "Coverage")]),
+    ("Reports", [
+        ("coverage", "/reports/coverage", "Coverage"),
+        ("fleet_age", "/reports/fleet-age", "Fleet Age"),
+    ]),
 ]
 
 # Web-cache entries that can be warm-started from the latest snapshot:
@@ -617,12 +621,35 @@ def create_app(demo: bool = False,
                       report=report, days=days, taken_at=taken_at,
                       device_index={d["id"]: d for d in devices})
 
+    def _fleet_age(days_param_years: int):
+        devices = cached("devices", lambda c: c.devices())
+        source = _coverage_source()
+        applecare = source[1] if source is not None else None
+        return fleet_age_report(devices, applecare, days_param_years)
+
+    @app.get("/reports/fleet-age", response_class=HTMLResponse)
+    def fleet_age_page(request: Request, years: int = 4):
+        guard("fleet_age")
+        years = max(1, min(years, 10))
+        return render(request, "fleet_age.html", active="fleet_age",
+                      report=_fleet_age(years), years=years)
+
     # ---- exports ----------------------------------------------------------
 
     @app.get("/export/{resource}.csv")
-    def export_csv(resource: str, live: int = 0, days: int = 90):
+    def export_csv(resource: str, live: int = 0, days: int = 90, years: int = 4):
         if resource == "applecare":
             return _applecare_csv(live=bool(live))
+        if resource == "refresh-candidates":
+            guard("fleet_age")
+            report = _fleet_age(max(1, min(years, 10)))
+            rows = [{"type": "refresh", "id": c["serial"], "attributes": {
+                "serialNumber": c["serial"], "deviceModel": c["model"],
+                "productFamily": c["family"], "ordered": c["ordered"],
+                "ageYears": c["age_years"],
+                "activeCoverage": c["covered"]}}
+                    for c in report["candidates"]]
+            return _csv_response(items_to_csv(rows), "refresh-candidates.csv")
         if resource == "coverage-expiring":
             guard("coverage")
             source = _coverage_source()

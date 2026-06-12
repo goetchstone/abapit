@@ -113,6 +113,57 @@ def coverage_report(applecare_items: list[dict], devices: list[dict],
     }
 
 
+def fleet_age_report(devices: list[dict], applecare_items: list[dict] | None,
+                     years: int, now: datetime | None = None) -> dict:
+    """Refresh planning: device age buckets and replacement candidates.
+
+    Age comes from orderDateTime (falling back to addedToOrgDateTime).
+    A device is a refresh candidate when it's at least `years` old; when
+    coverage data is available, candidates without active coverage are the
+    strongest signals. ABM itself offers none of this.
+    """
+    now = now or datetime.now(timezone.utc)
+    covered: set | None = None
+    if applecare_items is not None:
+        covered = {item.get("attributes", {}).get("serialNumber")
+                   for item in applecare_items
+                   if item.get("attributes", {}).get("status") == "ACTIVE"}
+
+    bucket_labels = ["< 1 yr", "1–2 yrs", "2–3 yrs", "3–4 yrs", "4+ yrs"]
+    buckets = {label: 0 for label in bucket_labels}
+    candidates, undated = [], 0
+    for device in devices:
+        attrs = device.get("attributes", {})
+        basis = parse_iso(attrs.get("orderDateTime")) or parse_iso(
+            attrs.get("addedToOrgDateTime"))
+        if basis is None:
+            undated += 1
+            continue
+        age_years = (now - basis).days / 365.25
+        buckets[bucket_labels[min(int(age_years), 4)]] += 1
+        if age_years >= years:
+            candidates.append({
+                "serial": device.get("id", ""),
+                "model": attrs.get("deviceModel", ""),
+                "family": attrs.get("productFamily", ""),
+                "ordered": attrs.get("orderDateTime") or attrs.get("addedToOrgDateTime"),
+                "age_years": round(age_years, 1),
+                "covered": (device.get("id") in covered) if covered is not None else None,
+            })
+    candidates.sort(key=lambda row: -row["age_years"])
+    return {
+        "buckets": [(label, buckets[label]) for label in bucket_labels],
+        "bucket_max": max(buckets.values(), default=0),
+        "candidates": candidates,
+        "uncovered_candidates": (
+            sum(1 for c in candidates if c["covered"] is False)
+            if covered is not None else None),
+        "undated": undated,
+        "years": years,
+        "has_coverage_data": covered is not None,
+    }
+
+
 def items_to_rows(items: list[dict]) -> tuple[list[str], list[list]]:
     """Flatten JSON:API items to (header, rows). `id` first, then the union
     of attribute keys in first-seen order."""

@@ -90,6 +90,7 @@ or 401. Nothing is sent anywhere except `account.apple.com` and
 | Audit Events | Org audit log with date-range and type filters *(Business only)* |
 | Changes | Snapshot-to-snapshot diffs: devices added/removed, MDM assignment moves, field-level attribute changes |
 | Coverage | AppleCare/warranty expiry report from the latest snapshot — "what expires in 30/60/90/180/365 days" plus devices with no active coverage; instant at any fleet size |
+| Fleet Age | Refresh planning: age distribution from order dates, devices older than N years, cross-referenced with coverage ("old **and** uncovered — replace first"), CSV for the budget meeting |
 | CSV everywhere | `/export/devices.csv`, `applecare.csv`, users, apps, … and the same via `abapit export` |
 
 Apple School Manager orgs see the device-related sections (that's what

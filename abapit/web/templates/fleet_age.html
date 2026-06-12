@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block titletag %}Fleet Age · abapit{% endblock %}
+{% block title %}Fleet Age &amp; Refresh Planning{% endblock %}
+{% block content %}
+
+<form method="get" class="toolbar">
+  <label>Refresh candidates: devices older than
+    <select name="years" onchange="this.form.submit()">
+      {% for y in (3, 4, 5, 6) %}
+      <option value="{{ y }}"{% if y == years %} selected{% endif %}>{{ y }} years</option>
+      {% endfor %}
+    </select>
+  </label>
+  <a class="btn ghost" href="/export/refresh-candidates.csv?years={{ years }}">Export CSV</a>
+  {% if not report.has_coverage_data %}
+  <span class="muted">No snapshot with AppleCare yet — coverage column unavailable (take one on <a href="/changes">Changes</a>)</span>
+  {% endif %}
+</form>
+
+<div class="cards">
+  <div class="card{% if report.candidates %} warn{% endif %}">
+    <div class="num">{{ report.candidates | length }}</div>
+    <div class="label">Devices ≥ {{ years }} years old</div>
+  </div>
+  {% if report.uncovered_candidates is not none %}
+  <div class="card{% if report.uncovered_candidates %} warn{% endif %}">
+    <div class="num">{{ report.uncovered_candidates }}</div>
+    <div class="label">…of those, no active coverage (replace first)</div>
+  </div>
+  {% endif %}
+  {% if report.undated %}
+  <div class="card"><div class="num">{{ report.undated }}</div><div class="label">Devices without order dates</div></div>
+  {% endif %}
+</div>
+
+<div class="panels">
+  <section class="panel">
+    <h2>Age distribution</h2>
+    {% for label, count in report.buckets %}
+    <div class="hbar-row">
+      <span class="hbar-label">{{ label }}</span>
+      <div class="hbar"><div style="width:{{ (count / report.bucket_max * 100) | round(1) if report.bucket_max }}%"></div></div>
+      <span class="hbar-num">{{ count }}</span>
+    </div>
+    {% endfor %}
+  </section>
+
+  <section class="panel wide">
+    <h2>Refresh candidates <span class="count">{{ report.candidates | length }}</span></h2>
+    <input data-filter="#candidates" type="search" placeholder="Filter…">
+    <table id="candidates">
+      <thead><tr><th>Serial</th><th>Model</th><th>Family</th><th>Ordered</th>
+        <th class="r">Age (yrs)</th><th>Active coverage</th></tr></thead>
+      <tbody>
+      {% for c in report.candidates[:300] %}
+      <tr>
+        <td><a href="/devices/{{ c.serial }}">{{ c.serial }}</a></td>
+        <td>{{ c.model }}</td>
+        <td>{{ c.family }}</td>
+        <td>{{ c.ordered | dt }}</td>
+        <td class="r">{{ c.age_years }}</td>
+        <td>{% if c.covered is none %}<span class="muted">unknown</span>
+            {% elif c.covered %}<span class="pill success">yes</span>
+            {% else %}<span class="pill expired">no</span>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="muted">No devices that old — young fleet. 🎉</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if report.candidates | length > 300 %}<p class="muted">Showing oldest 300 — the CSV has everything.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}
