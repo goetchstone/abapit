@@ -46,6 +46,45 @@ def test_plan_rejects_bad_inputs():
         plan("AAA", "assign", "srv-999", DEVICES, SERVERS, CURRENT)
 
 
+def test_probe_capabilities_maps_403_and_validation_errors(org, monkeypatch):
+    class FakeTokens:
+        def get(self, org): return "tok"
+        def invalidate(self, org): pass
+    monkeypatch.setattr(client_mod, "token_cache", FakeTokens())
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            # validation error, not 403 -> role allows writes
+            return httpx.Response(422, json={"errors": [{"title": "invalid"}]})
+        if "/v1/users" in request.url.path or "/v1/userGroups" in request.url.path:
+            return httpx.Response(403, json={"errors": [{"title": "Forbidden"}]})
+        return httpx.Response(200, json={"data": []})
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    results = {r["capability"]: r["status"] for r in client.probe_capabilities()}
+    assert results["Devices"] == "ok"
+    assert results["Users"] == "forbidden"
+    assert results["User groups"] == "forbidden"
+    assert results["Audit events"] == "ok"
+    assert results["Device assignment"] == "ok"  # 422 means authorized
+
+
+def test_probe_write_denied(org, monkeypatch):
+    class FakeTokens:
+        def get(self, org): return "tok"
+        def invalidate(self, org): pass
+    monkeypatch.setattr(client_mod, "token_cache", FakeTokens())
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(403, json={"errors": [{"title": "Forbidden"}]})
+        return httpx.Response(200, json={"data": []})
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    results = {r["capability"]: r["status"] for r in client.probe_capabilities()}
+    assert results["Device assignment"] == "forbidden"
+
+
 def test_create_device_activity_request_shape(org, monkeypatch):
     class FakeTokens:
         def get(self, org): return "tok"

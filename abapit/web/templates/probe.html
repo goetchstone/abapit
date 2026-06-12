@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block titletag %}Key permissions · abapit{% endblock %}
+{% block title %}<a class="crumb" href="/settings">Settings</a> / Key permissions{% endblock %}
+{% block content %}
+
+<div class="panels">
+  <section class="panel">
+    <h2>{{ probed_org.name }} <span class="badge">{{ probed_org.scope }}</span></h2>
+    <table>
+      <thead><tr><th>Capability</th><th>Kind</th><th>Result</th></tr></thead>
+      <tbody>
+      {% for r in results %}
+      <tr>
+        <td>{{ r.capability }}</td>
+        <td>{{ r.kind }}</td>
+        <td>
+          {% if r.status == 'ok' %}<span class="pill success">allowed</span>
+          {% elif r.status == 'forbidden' %}<span class="pill expired">denied (403)</span>
+          {% else %}<span class="pill">{{ r.status }}</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted footnote">The write check submits an assignment with an
+    <em>empty</em> device list — it can never change anything; Apple either
+    rejects it for permissions (denied) or for validation (allowed).</p>
+  </section>
+
+  <section class="panel">
+    <h2>How key permissions work</h2>
+    <p>Apple has no per-key scopes: an API key inherits the <strong>role of its
+    API account</strong>, set in Apple Business/School Manager under
+    <strong>Access&nbsp;Management&nbsp;→&nbsp;Roles</strong>. There is no API to query
+    permissions, which is why this page probes them empirically.</p>
+    <p>To change what a key can do:</p>
+    <ul class="plain">
+      <li><strong>Broaden or narrow this key</strong> — edit the API account's
+        role in ABM/ASM; takes effect on the same key, no re-adding needed.</li>
+      <li><strong>Keep tiered keys</strong> — create a second API account with a
+        different role (e.g. a read-mostly one for daily use and a device-manager
+        one for migrations) and <a href="/settings">add it here as another org
+        profile</a>; switch between them from the header dropdown.</li>
+    </ul>
+    <p class="muted">Least-privilege tip: if you mostly browse and report, run
+    day-to-day on the least-privileged role that passes the reads above, and
+    switch to the powerful profile only when you need to assign devices.</p>
+  </section>
+</div>
+{% endblock %}

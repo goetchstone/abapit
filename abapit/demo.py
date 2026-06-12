@@ -365,5 +365,13 @@ class DemoClient:
     def device_activity(self, activity_id: str) -> dict:
         return self._activities.get(activity_id, {})
 
+    def probe_capabilities(self) -> list[dict]:
+        from .client import ApiClient
+        results = [{"capability": label, "kind": "read", "status": "ok"}
+                   for label, _, _, business_only in ApiClient.READ_PROBES]
+        results.append({"capability": "Device assignment", "kind": "write",
+                        "status": "ok"})
+        return results
+
     def close(self) -> None:
         pass

@@ -193,6 +193,18 @@ def cmd_assign(args) -> None:
         sys.exit(1)
 
 
+def cmd_probe(args) -> None:
+    client = _client(args)
+    print(f"Key capabilities for {client.org.name} ({client.org.scope}) — "
+          "probed empirically; Apple has no permissions API:")
+    for result in client.probe_capabilities():
+        mark = {"ok": "+", "forbidden": "x"}.get(result["status"], "?")
+        print(f"  {mark} {result['capability']:22s} {result['kind']:6s} {result['status']}")
+    print("Permissions come from the API account's role in ABM/ASM "
+          "(Access Management > Roles). Edit the role there, or add a second "
+          "API account as another org profile for tiered access.")
+
+
 def cmd_token(args) -> None:
     cfg = config.load()
     slug = args.org or cfg.active_org
@@ -269,6 +281,12 @@ def main(argv: list[str] | None = None) -> None:
     p_assign.add_argument("--org", default="", help="org slug (default: active org)")
     p_assign.add_argument("--demo", action="store_true")
     p_assign.set_defaults(func=cmd_assign)
+
+    p_probe = sub.add_parser(
+        "probe", help="empirically map what the API key's role allows")
+    p_probe.add_argument("--org", default="", help="org slug (default: active org)")
+    p_probe.add_argument("--demo", action="store_true")
+    p_probe.set_defaults(func=cmd_probe)
 
     p_token = sub.add_parser("token", help="print a bearer token (for curl/scripts)")
     p_token.add_argument("--org", default="")

@@ -5,7 +5,10 @@
 
 {% if demo %}
 <div class="flash">Running in <strong>demo mode</strong> — fake data, no Apple credentials used.
-Orgs added here will be used the next time you run <code>abapit serve</code> without <code>--demo</code>.</div>
+Orgs added here will be used the next time you run <code>abapit serve</code> without <code>--demo</code>.
+<form method="post" action="/settings/orgs/demo/probe" style="display:inline">
+  <button class="btn small ghost">Probe demo key permissions</button>
+</form></div>
 {% endif %}
 
 <div class="panels">
@@ -27,6 +30,7 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
           <form method="post" action="/settings/orgs/{{ slug }}/activate"><button class="btn small">Use</button></form>
           {% endif %}
           <form method="post" action="/settings/orgs/{{ slug }}/test"><button class="btn small ghost">Test</button></form>
+          <form method="post" action="/settings/orgs/{{ slug }}/probe"><button class="btn small ghost" title="Empirically check what this key's role allows">Permissions</button></form>
           <form method="post" action="/settings/orgs/{{ slug }}/delete"
                 onsubmit="return confirm('Remove org {{ o.name }}? The saved key file will be deleted.')">
             <button class="btn small danger">Delete</button>

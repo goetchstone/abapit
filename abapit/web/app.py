@@ -700,6 +700,22 @@ def create_app(demo: bool = False,
         return RedirectResponse(
             f"/settings?msg={quote('Org removed.')}", status_code=303)
 
+    @app.post("/settings/orgs/{slug}/probe", response_class=HTMLResponse)
+    def settings_probe(request: Request, slug: str):
+        """Empirical permission map for one org's API key."""
+        if app.state.demo and slug == "demo":
+            probe_client = app.state.demo_client
+        else:
+            cfg = config.load()
+            org = cfg.orgs.get(slug)
+            if org is None:
+                return RedirectResponse(
+                    f"/settings?msg={quote('Org not found.')}", status_code=303)
+            probe_client = ApiClient(org)
+        results = probe_client.probe_capabilities()
+        return render(request, "probe.html", active="settings",
+                      results=results, probed_org=probe_client.org)
+
     @app.post("/settings/orgs/{slug}/test")
     def settings_test(slug: str):
         cfg = config.load()

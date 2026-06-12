@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -172,6 +173,65 @@ class ApiClient:
 
     def device_activity(self, activity_id: str) -> dict:
         return self.get(f"orgDeviceActivities/{activity_id}").get("data", {})
+
+    # -- capability probe ------------------------------------------------------
+
+    READ_PROBES = (
+        # (label, path, params, business_only)
+        ("Devices", "orgDevices", {"limit": 1}, False),
+        ("MDM servers", "mdmServers", {"limit": 1}, False),
+        ("Apple MDM enrolled", "mdmDevices", {"limit": 1}, True),
+        ("Users", "users", {"limit": 1}, True),
+        ("User groups", "userGroups", {"limit": 1}, True),
+        ("Apps", "apps", {"limit": 1}, True),
+        ("Packages", "packages", {"limit": 1}, True),
+        ("Blueprints", "blueprints", {"limit": 1}, True),
+        ("Configurations", "configurations", {"limit": 1}, True),
+        ("Audit events", "auditEvents", None, True),  # params filled at runtime
+    )
+
+    def probe_capabilities(self) -> list[dict]:
+        """Empirically map what this API account's role allows.
+
+        Apple exposes no permissions endpoint — the only signal is which
+        calls return 403. Reads use limit=1 (one cheap item each). The
+        write probe submits an assignment activity with an EMPTY device
+        list, which can never change anything: 403 means no write
+        permission; a validation error (400/409/422) or 201 means the
+        role allows writes.
+        """
+        now = datetime.now(timezone.utc)
+        results = []
+        for label, path, params, business_only in self.READ_PROBES:
+            if business_only and self.org.scope != "business":
+                continue
+            if path == "auditEvents":
+                params = {
+                    "filter[startTimestamp]": (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "filter[endTimestamp]": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "limit": 1,
+                }
+            try:
+                self.get(path, params)
+                status = "ok"
+            except ApiError as exc:
+                status = "forbidden" if exc.status == 403 else f"error {exc.status}"
+            results.append({"capability": label, "kind": "read", "status": status})
+
+        try:
+            self.create_device_activity("ASSIGN_DEVICES",
+                                        "00000000-0000-0000-0000-000000000000", [])
+            status = "ok"
+        except ApiError as exc:
+            if exc.status == 403:
+                status = "forbidden"
+            elif exc.status in (400, 404, 409, 422):
+                status = "ok"  # request was validated, so the role allows writes
+            else:
+                status = f"error {exc.status}"
+        results.append({"capability": "Device assignment", "kind": "write",
+                        "status": status})
+        return results
 
     # -- people (Business API only) -----------------------------------------
 

@@ -119,9 +119,22 @@ abapit snapshot [--skip-applecare] [--keep N]
 abapit changes [--json]
 abapit assign --server "Jamf Pro" --file serials.txt          # DRY RUN: prints the plan
 abapit assign --server "Jamf Pro" --file serials.txt --yes    # executes, tracks to completion
+abapit probe                             # empirically map what the key's role allows
 abapit token                             # print a bearer token for curl
 abapit orgs                              # list configured orgs
 ```
+
+## Key permissions
+
+Apple has **no per-key scopes and no permissions API** — a key inherits the
+role of its API account, set in ABM/ASM under Access Management → Roles. So
+abapit maps permissions empirically: the **Permissions** button in Settings
+(or `abapit probe`) makes one cheap read per category and a can-never-change-
+anything write check, and shows you exactly what the key's role allows.
+
+To run tiered access, create two API accounts in ABM — a read-mostly one for
+daily use and a device-manager one for migrations — and add both as org
+profiles; switch from the header dropdown.
 
 ## Security model
 
