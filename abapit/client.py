@@ -9,6 +9,9 @@ API, which currently covers devices and device management services.
 
 from __future__ import annotations
 
+import sys
+import time
+
 import httpx
 
 from .auth import token_cache
@@ -55,7 +58,7 @@ class ApiClient:
         self,
         org: Org,
         page_limit: int = 1000,
-        max_pages: int = 50,
+        max_pages: int = 200,
         transport: httpx.BaseTransport | None = None,
     ):
         self.org = org
@@ -68,16 +71,27 @@ class ApiClient:
 
     def _request(self, url: str, params: dict | None = None) -> dict:
         token = token_cache.get(self.org)
-        resp = self._http.get(
-            url, params=params, headers={"Authorization": f"Bearer {token}"}
-        )
-        if resp.status_code == 401:
-            # Token may have just expired; refresh once and retry.
-            token_cache.invalidate(self.org)
-            token = token_cache.get(self.org)
+        refreshed = False
+        for attempt in range(5):
             resp = self._http.get(
                 url, params=params, headers={"Authorization": f"Bearer {token}"}
             )
+            if resp.status_code == 401 and not refreshed:
+                # Token may have just expired; refresh once and retry.
+                token_cache.invalidate(self.org)
+                token = token_cache.get(self.org)
+                refreshed = True
+                continue
+            if resp.status_code == 429 and attempt < 4:
+                # Rate limited — honor Retry-After, else back off exponentially.
+                # Matters most for bulk AppleCare lookups on large fleets.
+                try:
+                    delay = float(resp.headers.get("Retry-After", ""))
+                except ValueError:
+                    delay = 2.0 ** attempt
+                time.sleep(min(delay, 60))
+                continue
+            break
         if resp.status_code >= 400:
             raise ApiError(resp.status_code, _error_message(resp))
         return resp.json()
@@ -96,6 +110,9 @@ class ApiClient:
             body = self._request(body["links"]["next"])
             items.extend(body.get("data", []))
             pages += 1
+        if body.get("links", {}).get("next"):
+            print(f"warning: {path} truncated after {pages} pages "
+                  f"({len(items)} items) — raise max_pages", file=sys.stderr)
         return items
 
     # -- devices ----------------------------------------------------------

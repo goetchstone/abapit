@@ -122,7 +122,11 @@ abapit orgs                              # list configured orgs
   Roadmap: device→MDM assignment via `orgDeviceActivities` (with explicit
   confirmations), then blueprint/configuration CRUD.
 - Responses are cached in memory for 5 minutes per org (the **Refresh**
-  button clears it) to stay friendly with Apple's rate limits.
+  button clears it) to stay friendly with Apple's rate limits; 429s are
+  retried automatically with backoff, honoring `Retry-After`.
+- Scale: listings page at 1,000 items per API call, so a 5,000-device org
+  cold-loads in seconds and a 20,000-device org in under a minute (then
+  it's cached). Tested patterns hold to ~200k items per resource.
 - The AppleCare bulk report is one API call per device — fine for hundreds of
   devices, slow for tens of thousands. Take a snapshot and it's instant
   thereafter.

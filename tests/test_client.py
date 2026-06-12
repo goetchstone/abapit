@@ -56,6 +56,32 @@ def test_401_invalidates_token_and_retries_once(org, fake_tokens):
     assert calls["n"] == 2
 
 
+def test_429_backs_off_and_retries(org, fake_tokens, monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(client_mod.time, "sleep", sleeps.append)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return httpx.Response(429, headers={"Retry-After": "7"})
+        return httpx.Response(200, json={"data": [{"type": "orgDevices", "id": "S1"}]})
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    assert [i["id"] for i in client.devices()] == ["S1"]
+    assert calls["n"] == 3
+    assert sleeps == [7.0, 7.0]  # honored Retry-After
+
+
+def test_429_gives_up_after_retries(org, fake_tokens, monkeypatch):
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)
+    client = ApiClient(org, transport=httpx.MockTransport(
+        lambda request: httpx.Response(429, json={"errors": [{"title": "rate limited"}]})))
+    with pytest.raises(ApiError) as exc:
+        client.devices()
+    assert exc.value.status == 429
+
+
 def test_api_error_surfaces_apple_error_detail(org, fake_tokens):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, json={"errors": [
