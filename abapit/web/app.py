@@ -235,12 +235,14 @@ def create_app(demo: bool = False,
         nav = [(group, [item for item in items if item[0] in allowed or item[0] == "dashboard"])
                for group, items in NAV]
         nav = [(group, items) for group, items in nav if items]
-        denied = c.org.denied_sections() if c and not c.is_demo else set()
+        # Locks must reflect the config as of THIS request — never the Org
+        # snapshot frozen inside a cached ApiClient.
+        fresh_org = cfg.get_active() if cfg else None
         return templates.TemplateResponse(request, template, {
             "active": active,
             "nav": nav,
-            "denied": denied,
-            "probed_at": c.org.probed_at if c and not c.is_demo else "",
+            "denied": fresh_org.denied_sections() if fresh_org else set(),
+            "probed_at": fresh_org.probed_at if fresh_org else "",
             "stale": _stale_ctx.get(),
             "demo": app.state.demo,
             "org": c.org if c else None,
@@ -724,6 +726,8 @@ def create_app(demo: bool = False,
         if not (app.state.demo and slug == "demo"):
             config.update_org_capabilities(
                 slug, {r["section"]: r["status"] for r in results})
+            # Rebuild this org's cached client so it carries the fresh Org.
+            app.state.clients.pop(slug, None)
         return render(request, "probe.html", active="settings",
                       results=results, probed_org=probe_client.org)
 

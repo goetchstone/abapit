@@ -3,6 +3,11 @@
 {% block title %}Assign Devices to MDM{% endblock %}
 {% block content %}
 
+<div class="flash stale">&#9888;&#65039; <strong>This page changes your Apple
+Business/School Manager organization.</strong> Use at your own risk — review
+every dry-run preview before confirming. Moving a device to the wrong MDM
+service affects its enrollment.</div>
+
 {% if error %}<div class="flash stale">{{ error }}</div>{% endif %}
 
 <div class="panels">

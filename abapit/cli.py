@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import webbrowser
+from pathlib import Path
 
 from . import __version__, config, history
 from .assign import plan as plan_assignment
@@ -228,6 +229,79 @@ def cmd_token(args) -> None:
     print(token)
 
 
+LAUNCH_AGENT_ID = "io.abapit.serve"
+
+
+def _launch_agent_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_ID}.plist"
+
+
+def _app_bundle_path() -> Path:
+    return Path.home() / "Applications" / "abapit.app"
+
+
+def cmd_install_app(args) -> None:
+    """Make abapit feel like an app: a login service + a clickable .app."""
+    if sys.platform != "darwin":
+        sys.exit("install-app is macOS-only.")
+    import plistlib
+    import subprocess
+
+    log_path = Path.home() / "Library" / "Logs" / "abapit.log"
+    plist_path = _launch_agent_path()
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(plist_path, "wb") as fh:
+        plistlib.dump({
+            "Label": LAUNCH_AGENT_ID,
+            "ProgramArguments": [sys.executable, "-m", "abapit.cli", "serve",
+                                 "--no-browser", "--port", str(args.port)],
+            "RunAtLoad": True,
+            "KeepAlive": True,
+            "StandardOutPath": str(log_path),
+            "StandardErrorPath": str(log_path),
+        }, fh)
+    subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
+    subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True)
+
+    contents = _app_bundle_path() / "Contents"
+    (contents / "MacOS").mkdir(parents=True, exist_ok=True)
+    launcher = contents / "MacOS" / "abapit"
+    launcher.write_text(f"#!/bin/sh\nopen 'http://127.0.0.1:{args.port}'\n")
+    launcher.chmod(0o755)
+    with open(contents / "Info.plist", "wb") as fh:
+        plistlib.dump({
+            "CFBundleName": "abapit",
+            "CFBundleDisplayName": "abapit",
+            "CFBundleIdentifier": "io.abapit.launcher",
+            "CFBundleExecutable": "abapit",
+            "CFBundleVersion": __version__,
+            "CFBundlePackageType": "APPL",
+        }, fh)
+
+    print(f"""Installed:
+  - Background service {LAUNCH_AGENT_ID}: abapit now runs at login on
+    port {args.port} (no terminal needed; logs in {log_path}).
+  - {_app_bundle_path()} - click it like any app; drag it to your Dock.
+Even more app-like: open http://127.0.0.1:{args.port} in Safari and use
+File > Add to Dock for a standalone window with its own icon.
+Undo everything with: abapit uninstall-app""")
+
+
+def cmd_uninstall_app(args) -> None:
+    if sys.platform != "darwin":
+        sys.exit("uninstall-app is macOS-only.")
+    import shutil
+    import subprocess
+
+    plist_path = _launch_agent_path()
+    if plist_path.exists():
+        subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
+        plist_path.unlink()
+    if _app_bundle_path().exists():
+        shutil.rmtree(_app_bundle_path())
+    print("Removed the login service and ~/Applications/abapit.app.")
+
+
 def cmd_orgs(args) -> None:
     cfg = config.load()
     if not cfg.orgs:
@@ -305,6 +379,16 @@ def main(argv: list[str] | None = None) -> None:
 
     p_orgs = sub.add_parser("orgs", help="list configured orgs")
     p_orgs.set_defaults(func=cmd_orgs)
+
+    p_install = sub.add_parser(
+        "install-app",
+        help="macOS: run abapit at login and add a clickable abapit.app")
+    p_install.add_argument("--port", type=int, default=8866)
+    p_install.set_defaults(func=cmd_install_app)
+
+    p_uninstall = sub.add_parser(
+        "uninstall-app", help="macOS: remove the login service and abapit.app")
+    p_uninstall.set_defaults(func=cmd_uninstall_app)
 
     args = parser.parse_args(argv)
     args.func(args)

@@ -14,6 +14,13 @@ one-click CSV exports.
   `abapit token` (prints a bearer token for `curl`) fit munki/autopkg-style
   automation.
 
+> **⚠️ Use at your own risk.** abapit is a community tool, not affiliated
+> with or endorsed by Apple. Most of it is read-only, but the assignment
+> feature **modifies your organization** (device↔MDM moves affect
+> enrollment). Every write is gated behind a dry-run preview and explicit
+> confirmation — review previews carefully. Provided as-is, without
+> warranty (MIT).
+
 ## Quick start (no credentials needed)
 
 Needs Python 3.10+ (`brew install python` if your Mac doesn't have it).
@@ -26,6 +33,21 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 
 Or as a one-liner without cloning, if you have pipx:
 `pipx install git+https://github.com/goetchstone/abapit`
+
+## Run it like an app (no terminal)
+
+It's a web app under the hood, but nobody should have to babysit a terminal:
+
+```sh
+abapit install-app
+```
+
+That registers a login service (abapit runs in the background on
+`127.0.0.1:8866`, restarts if it crashes, logs to `~/Library/Logs/abapit.log`)
+and creates **`~/Applications/abapit.app`** — click it like any Mac app, drag
+it to your Dock. For a standalone window with its own icon, open
+`http://127.0.0.1:8866` in Safari and choose **File → Add to Dock**.
+`abapit uninstall-app` removes both.
 
 ## Connecting your real org
 
