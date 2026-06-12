@@ -288,6 +288,21 @@ File > Add to Dock for a standalone window with its own icon.
 Undo everything with: abapit uninstall-app""")
 
 
+def cmd_restart_app(args) -> None:
+    """Restart the login service — needed after updating the code."""
+    if sys.platform != "darwin":
+        sys.exit("restart-app is macOS-only.")
+    import os
+    import subprocess
+    result = subprocess.run(
+        ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{LAUNCH_AGENT_ID}"],
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.exit(f"Could not restart {LAUNCH_AGENT_ID}: "
+                 f"{result.stderr.strip() or 'is it installed? (abapit install-app)'}")
+    print("Restarted. New code is live; logs in ~/Library/Logs/abapit.log")
+
+
 def cmd_uninstall_app(args) -> None:
     if sys.platform != "darwin":
         sys.exit("uninstall-app is macOS-only.")
@@ -387,11 +402,23 @@ def main(argv: list[str] | None = None) -> None:
     p_install.add_argument("--port", type=int, default=8866)
     p_install.set_defaults(func=cmd_install_app)
 
+    p_restart = sub.add_parser(
+        "restart-app", help="macOS: restart the login service (after updates)")
+    p_restart.set_defaults(func=cmd_restart_app)
+
     p_uninstall = sub.add_parser(
         "uninstall-app", help="macOS: remove the login service and abapit.app")
     p_uninstall.set_defaults(func=cmd_uninstall_app)
 
     args = parser.parse_args(argv)
+    import logging
+    import os
+    level = os.environ.get("ABAPIT_LOG") or (
+        "INFO" if args.command == "serve" else "WARNING")
+    logging.basicConfig(
+        level=level.upper(),
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S")
     try:
         args.func(args)
     except (AuthError, ApiError) as exc:

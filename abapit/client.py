@@ -9,11 +9,14 @@ API, which currently covers devices and device management services.
 
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
+
+log = logging.getLogger("abapit")
 
 from .auth import token_cache
 from .config import Org
@@ -82,6 +85,7 @@ class ApiClient:
                  method: str = "GET", json_body: dict | None = None) -> dict:
         token = token_cache.get(self.org)
         refreshed = False
+        started = time.perf_counter()
         for attempt in range(5):
             try:
                 resp = self._http.request(
@@ -93,11 +97,14 @@ class ApiClient:
                 # emits malformed responses under load). Retry GETs only —
                 # a retried POST could double-submit an activity.
                 if method == "GET" and attempt < 4:
+                    log.warning("network error on %s %s (attempt %d): %s — retrying",
+                                method, url, attempt + 1, exc)
                     time.sleep(0.5 * (attempt + 1))
                     continue
                 raise ApiError(0, f"network error: {exc}") from exc
             if resp.status_code == 401 and not refreshed:
                 # Token may have just expired; refresh once and retry.
+                log.info("401 from %s — refreshing token", url)
                 token_cache.invalidate(self.org)
                 token = token_cache.get(self.org)
                 refreshed = True
@@ -110,9 +117,13 @@ class ApiClient:
                     delay = float(resp.headers.get("Retry-After", ""))
                 except ValueError:
                     delay = 2.0 ** attempt
+                log.warning("429 rate limited on %s — backing off %.0fs "
+                            "(attempt %d/5)", url, min(delay, 60), attempt + 1)
                 time.sleep(min(delay, 60))
                 continue
             break
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        log.info("%s %s -> %d (%.0f ms)", method, url, resp.status_code, elapsed_ms)
         if resp.status_code >= 400:
             raise ApiError(resp.status_code, _error_message(resp))
         return resp.json()
@@ -132,8 +143,8 @@ class ApiClient:
             items.extend(body.get("data", []))
             pages += 1
         if body.get("links", {}).get("next"):
-            print(f"warning: {path} truncated after {pages} pages "
-                  f"({len(items)} items) — raise max_pages", file=sys.stderr)
+            log.warning("%s truncated after %d pages (%d items) — raise max_pages",
+                        path, pages, len(items))
         return items
 
     # -- devices ----------------------------------------------------------

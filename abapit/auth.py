@@ -13,6 +13,7 @@ the Apple School Manager and Apple Business API"):
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 
@@ -20,6 +21,8 @@ import httpx
 import jwt
 
 from .config import Org, config_dir
+
+log = logging.getLogger("abapit")
 
 TOKEN_URL = "https://account.apple.com/auth/oauth2/token"
 ASSERTION_AUDIENCE = "https://account.apple.com/auth/oauth2/v2/token"
@@ -57,6 +60,7 @@ def request_access_token(org: Org) -> tuple[str, int]:
 
     Returns (token, expires_at_epoch).
     """
+    log.info("minting new access token for %s (%s)", org.name, org.client_id)
     assertion = build_client_assertion(org)
     data = {
         "grant_type": "client_credentials",

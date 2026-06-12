@@ -9,6 +9,7 @@ org so casual browsing doesn't hammer Apple's rate limits.
 from __future__ import annotations
 
 import contextvars
+import logging
 import sys
 import threading
 import time
@@ -79,6 +80,8 @@ SNAPSHOT_RESOURCES = {
 }
 
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+log = logging.getLogger("abapit")
 
 # Set per-request when a page was served from snapshot data; read by render().
 _stale_ctx: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
@@ -219,8 +222,7 @@ def create_app(demo: bool = False,
                 value = fetch(c)
                 app.state.cache[key] = (time.time(), value)
             except Exception as exc:
-                print(f"warning: background refresh of {key[1]} failed: {exc}",
-                      file=sys.stderr)
+                log.warning("background refresh of %s failed: %s", key[1], exc)
             finally:
                 with app.state.refresh_lock:
                     app.state.refreshing.discard(key)

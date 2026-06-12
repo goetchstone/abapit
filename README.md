@@ -47,7 +47,23 @@ That registers a login service (abapit runs in the background on
 and creates **`~/Applications/abapit.app`** — click it like any Mac app, drag
 it to your Dock. For a standalone window with its own icon, open
 `http://127.0.0.1:8866` in Safari and choose **File → Add to Dock**.
+After pulling new code, run `abapit restart-app` so the service loads it.
 `abapit uninstall-app` removes both.
+
+## Logging
+
+Every Apple API call is logged with status and latency, along with token
+mints, rate-limit backoffs, and background-refresh failures:
+
+```
+2026-06-12 10:23:34 INFO GET https://api-business.apple.com/v1/orgDevices -> 200 (861 ms)
+```
+
+With the login service, logs land in `~/Library/Logs/abapit.log`; in a
+terminal they go to stderr. Set `ABAPIT_LOG=debug` (or `warning`) to change
+verbosity. If you ever wonder whether abapit is hammering Apple:
+`grep minting ~/Library/Logs/abapit.log` — you should see at most one per
+org per hour.
 
 ## Connecting your real org
 
