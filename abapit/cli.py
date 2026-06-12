@@ -22,6 +22,7 @@ from pathlib import Path
 from . import __version__, config, history
 from .assign import plan as plan_assignment
 from .auth import AuthError, request_access_token
+from .client import ApiError
 
 EXPORT_RESOURCES = {
     "devices": "devices",
@@ -391,7 +392,12 @@ def main(argv: list[str] | None = None) -> None:
     p_uninstall.set_defaults(func=cmd_uninstall_app)
 
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except (AuthError, ApiError) as exc:
+        sys.exit(f"error: {exc}")
+    except KeyboardInterrupt:
+        sys.exit(130)
 
 
 if __name__ == "__main__":
