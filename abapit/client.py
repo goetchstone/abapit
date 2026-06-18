@@ -45,9 +45,14 @@ BUSINESS_SECTIONS = (
 )
 SCHOOL_SECTIONS = ("devices", "mdm_servers", "changes", "coverage",
                    "fleet_age", "assign")
+# Mosyle is read-only here for now and starts with device inventory only;
+# reports and actions land in later phases.
+MOSYLE_SECTIONS = ("devices",)
 
 
-def sections_for(scope: str) -> tuple[str, ...]:
+def sections_for(scope: str, provider: str = "apple") -> tuple[str, ...]:
+    if provider == "mosyle":
+        return MOSYLE_SECTIONS
     return BUSINESS_SECTIONS if scope == "business" else SCHOOL_SECTIONS
 
 
@@ -314,6 +319,10 @@ class ApiClient:
         if event_type:
             params["filter[type]"] = event_type
         return self.list_all("auditEvents", params)
+
+    def ping(self) -> None:
+        """Cheap auth/connectivity check for Settings → Test."""
+        self.get("orgDevices", {"limit": 1})
 
     def close(self) -> None:
         self._http.close()

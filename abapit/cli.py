@@ -47,8 +47,8 @@ def _client(args):
     if org is None:
         sys.exit("No org configured. Run `abapit serve` and add one in Settings, "
                  "or use --demo for fake data.")
-    from .client import ApiClient
-    return ApiClient(org)
+    from .factory import build_client
+    return build_client(org)
 
 
 def cmd_serve(args) -> None:
@@ -326,7 +326,8 @@ def cmd_orgs(args) -> None:
     for slug, org in cfg.orgs.items():
         marker = "*" if slug == cfg.active_org else " "
         role = f"  [{org.role}]" if org.role else ""
-        print(f"{marker} {slug:20s} {org.scope:8s} {org.name}{role}")
+        kind = "mosyle" if org.is_mosyle else org.scope
+        print(f"{marker} {slug:20s} {kind:8s} {org.name}{role}")
 
 
 def main(argv: list[str] | None = None) -> None:

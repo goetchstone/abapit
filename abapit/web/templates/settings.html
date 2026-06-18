@@ -16,14 +16,14 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
     <h2>Organizations</h2>
     {% if orgs %}
     <table>
-      <thead><tr><th></th><th>Name</th><th>Role</th><th>Scope</th><th>Client ID</th><th>Key access</th><th></th></tr></thead>
+      <thead><tr><th></th><th>Name</th><th>Role</th><th>Type</th><th>Client ID</th><th>Key access</th><th></th></tr></thead>
       <tbody>
       {% for slug, o in orgs.items() %}
       <tr>
         <td>{% if slug == active_org %}<span class="pill active">active</span>{% endif %}</td>
         <td>{{ o.name }}</td>
         <td>{{ o.role or '—' }}</td>
-        <td>{{ o.scope }}</td>
+        <td>{{ 'Mosyle' if o.provider == 'mosyle' else o.scope }}</td>
         <td><code>{{ o.client_id[:24] }}{% if o.client_id | length > 24 %}…{% endif %}</code></td>
         <td>{% if o.probed_at %}{{ o.capabilities.values() | select('equalto', 'ok') | list | length }}/{{ o.capabilities | length }} allowed
             <span class="muted">({{ o.probed_at | dt }})</span>
@@ -76,6 +76,21 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
         <input name="key_path" placeholder="~/Downloads/abm_key.pem">
       </label>
       <div class="full"><button class="btn primary">Add org</button></div>
+    </form>
+  </section>
+
+  <section class="panel wide">
+    <h2>Add a Mosyle organization</h2>
+    <p class="muted">In Mosyle Business: <strong>API Integration</strong> →
+    enable a profile and copy its access token. abapit reads device inventory
+    (live status, last check-in, OS, storage, assigned user) — no private key
+    needed.</p>
+    <form method="post" action="/settings/orgs/mosyle" class="form-grid">
+      <label>Display name <input name="name" required placeholder="Acme (Mosyle)"></label>
+      <label class="full">API access token
+        <input name="token" required placeholder="paste the token from Mosyle's API Integration profile">
+      </label>
+      <div class="full"><button class="btn primary">Add Mosyle org</button></div>
     </form>
   </section>
 </div>

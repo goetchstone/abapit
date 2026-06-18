@@ -27,8 +27,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .. import __version__, config, history
 from ..assign import plan as plan_assignment
 from ..auth import AuthError, token_cache
-from ..client import ApiClient, ApiError, sections_for
+from ..client import ApiError, sections_for
 from ..demo import DemoClient
+from ..factory import build_client
 from ..reports import (assignment_summary, coverage_report, device_stats,
                        fleet_age_report, items_to_csv, items_to_rows,
                        parse_iso)
@@ -144,7 +145,7 @@ def create_app(demo: bool = False,
 
     app.state.demo = demo
     app.state.demo_client = DemoClient() if demo else None
-    app.state.clients = {}          # org slug -> ApiClient
+    app.state.clients = {}          # org slug -> provider client
     app.state.cache = {}            # (org key, name) -> (timestamp, value)
     app.state.refreshing = set()    # cache keys with a background fetch in flight
     app.state.refresh_lock = threading.Lock()
@@ -160,7 +161,7 @@ def create_app(demo: bool = False,
         if org is None:
             raise NoOrgError()
         if cfg.active_org not in app.state.clients:
-            app.state.clients[cfg.active_org] = ApiClient(org)
+            app.state.clients[cfg.active_org] = build_client(org)
         return app.state.clients[cfg.active_org]
 
     def cached(name: str, fetch, force: bool = False):
@@ -237,7 +238,8 @@ def create_app(demo: bool = False,
             pass
         cfg = config.load() if not app.state.demo else None
         scope = c.org.scope if c else "business"
-        allowed = set(sections_for(scope))
+        provider = c.org.provider if c else "apple"
+        allowed = set(sections_for(scope, provider))
         nav = [(group, [item for item in items if item[0] in allowed or item[0] == "dashboard"])
                for group, items in NAV]
         nav = [(group, items) for group, items in nav if items]
@@ -262,11 +264,12 @@ def create_app(demo: bool = False,
 
     def guard(section: str):
         """Redirect to the dashboard if this section isn't available for the
-        active org's scope (e.g. users on an Apple School Manager org)."""
-        if section not in sections_for(client().org.scope):
-            scope = client().org.scope
+        active org's provider/scope (e.g. users on an Apple School Manager
+        org, or anything beyond devices on a Mosyle org)."""
+        org = client().org
+        if section not in sections_for(org.scope, org.provider):
             raise ApiError(404, f"The {section} section is not available for "
-                                f"{scope} orgs.")
+                                f"{org.provider}/{org.scope} orgs.")
 
     def matches(item: dict, q: str) -> bool:
         needle = q.lower()
@@ -313,13 +316,19 @@ def create_app(demo: bool = False,
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
+        org = client().org
+        allowed = sections_for(org.scope, org.provider)
         devices = cached("devices", lambda c: c.devices())
-        servers = cached("mdm_servers", lambda c: c.mdm_servers())
-        server_ids = cached("server_device_ids", lambda c: _server_ids(c, servers))
         stats = device_stats(devices)
-        assignment = assignment_summary(devices, servers, server_ids)
+        # MDM-server/assignment data is an ABM concept; skip it for providers
+        # that don't model it (Mosyle), so the page shows device stats only.
+        assignment = None
+        if "mdm_servers" in allowed:
+            servers = cached("mdm_servers", lambda c: c.mdm_servers())
+            server_ids = cached("server_device_ids", lambda c: _server_ids(c, servers))
+            assignment = assignment_summary(devices, servers, server_ids)
         events = []
-        if "audit_events" in sections_for(client().org.scope):
+        if "audit_events" in allowed:
             try:
                 end = datetime.now(timezone.utc)
                 start = end - timedelta(days=7)
@@ -745,6 +754,16 @@ def create_app(demo: bool = False,
             msg = f"Could not add org: {exc}"
         return RedirectResponse(f"/settings?msg={quote(msg)}", status_code=303)
 
+    @app.post("/settings/orgs/mosyle")
+    def settings_add_mosyle(name: str = Form(...), token: str = Form("")):
+        try:
+            config.add_org(name=name, provider="mosyle", mosyle_token=token.strip())
+            msg = (f"Added Mosyle org {name!r}. Click Test to verify the token, "
+                   "then Use to switch to it.")
+        except ValueError as exc:
+            msg = f"Could not add Mosyle org: {exc}"
+        return RedirectResponse(f"/settings?msg={quote(msg)}", status_code=303)
+
     @app.post("/settings/orgs/{slug}/activate")
     def settings_activate(slug: str):
         config.set_active(slug)
@@ -771,8 +790,9 @@ def create_app(demo: bool = False,
                     f"/settings?msg={quote('Org not found.')}", status_code=303)
             # Mint a fresh token: a role edited in ABM moments ago may not be
             # reflected in a cached bearer token.
-            token_cache.invalidate(org)
-            probe_client = ApiClient(org)
+            if org.provider == "apple":
+                token_cache.invalidate(org)
+            probe_client = build_client(org)
         results = probe_client.probe_capabilities()
         if not (app.state.demo and slug == "demo"):
             config.update_org_capabilities(
@@ -790,9 +810,10 @@ def create_app(demo: bool = False,
             msg = "Org not found."
         else:
             try:
-                token_cache.invalidate(org)
-                probe = ApiClient(org)
-                probe.get("orgDevices", {"limit": 1})
+                if org.provider == "apple":
+                    token_cache.invalidate(org)
+                probe = build_client(org)
+                probe.ping()
                 probe.close()
                 msg = f"✅ {org.name}: authentication and device listing work."
             except (ApiError, AuthError, Exception) as exc:  # show, don't crash

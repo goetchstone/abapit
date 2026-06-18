@@ -10,6 +10,13 @@
     {{ attr_table(device.attributes) }}
   </section>
 
+  {% if org and org.provider == 'mosyle' %}
+  <section class="panel">
+    <h2>Management</h2>
+    <p>Managed by <strong>Mosyle</strong>. Live device state — status, last
+    check-in, OS, storage, assigned user — is shown at left.</p>
+  </section>
+  {% else %}
   <section class="panel">
     <h2>MDM assignment</h2>
     {% if server %}
@@ -52,5 +59,6 @@
     <p class="muted">No coverage records.</p>
     {% endfor %}
   </section>
+  {% endif %}
 </div>
 {% endblock %}

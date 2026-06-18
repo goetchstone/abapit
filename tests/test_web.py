@@ -106,7 +106,7 @@ def test_denied_sections_lock_navigation(tmp_path, monkeypatch, ec_key_pair):
         slug, {"devices": "ok", "users": "forbidden", "apps": "forbidden"})
 
     import abapit.web.app as app_mod
-    monkeypatch.setattr(app_mod, "ApiClient",
+    monkeypatch.setattr(app_mod, "build_client",
                         lambda org: StubFleet([_device("AAA")], org=org))
     client = TestClient(create_app(), base_url="http://127.0.0.1",
                         follow_redirects=False)
@@ -163,7 +163,7 @@ def test_warm_start_serves_snapshot_then_live(tmp_path, monkeypatch, ec_key_pair
     history.take_snapshot(StubFleet([_device("AAA")]), include_applecare=False)
 
     import abapit.web.app as app_mod
-    monkeypatch.setattr(app_mod, "ApiClient",
+    monkeypatch.setattr(app_mod, "build_client",
                         lambda org: StubFleet([_device("BBB")], org=org))
     client = TestClient(create_app(), base_url="http://127.0.0.1",
                         follow_redirects=False)

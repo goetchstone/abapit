@@ -392,5 +392,8 @@ class DemoClient:
                         "kind": "write", "status": "ok"})
         return results
 
+    def ping(self) -> None:
+        pass
+
     def close(self) -> None:
         pass
