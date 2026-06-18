@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block titletag %}Mosyle Stale Devices · abapit{% endblock %}
+{% block title %}Mosyle Stale Devices{% endblock %}
+{% block content %}
+
+<form method="get" class="toolbar">
+  <label>Not checked in for
+    <select name="days" onchange="this.form.submit()">
+      {% for d in (7, 14, 30, 60, 90) %}
+      <option value="{{ d }}"{% if d == days %} selected{% endif %}>{{ d }}+ days</option>
+      {% endfor %}
+    </select>
+  </label>
+  <a class="btn ghost" href="/export/mosyle-stale.csv?days={{ days }}">Export CSV</a>
+</form>
+
+<div class="cards">
+  <div class="card{% if report.stale_count %} warn{% endif %}">
+    <div class="num">{{ report.stale_count }}</div>
+    <div class="label">Stale ≥ {{ days }} days (of {{ report.total }})</div>
+  </div>
+  <div class="card{% if report.never_count %} warn{% endif %}">
+    <div class="num">{{ report.never_count }}</div>
+    <div class="label">Never checked in</div>
+  </div>
+</div>
+
+<div class="panels">
+  <section class="panel wide">
+    <h2>Stale devices <span class="count">{{ report.stale_count }}</span></h2>
+    <input data-filter="#stale" type="search" placeholder="Filter…">
+    <table id="stale">
+      <thead><tr><th>Serial</th><th>Model</th><th>Family</th><th>OS</th>
+        <th>Last check-in</th><th>User</th><th class="r">Days stale</th></tr></thead>
+      <tbody>
+      {% for r in report.rows[:500] %}
+      <tr>
+        <td><a href="/devices/{{ r.serial }}">{{ r.serial }}</a></td>
+        <td>{{ r.deviceModel }}</td>
+        <td>{{ r.productFamily }}</td>
+        <td>{{ r.osVersion }}</td>
+        <td>{% if r.lastCheckIn %}{{ r.lastCheckIn | dtt }}{% else %}<span class="muted">Never</span>{% endif %}</td>
+        <td>{{ r.currentUser }}</td>
+        <td class="r">{% if r.days_stale is none %}<span class="pill expired">never</span>{% else %}{{ r.days_stale }}{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="muted">Every device has checked in within {{ days }} days. 🎉</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if report.rows | length > 500 %}<p class="muted">Showing first 500 — the CSV has everything.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

@@ -32,7 +32,8 @@ from ..demo import DemoClient
 from ..factory import build_client
 from ..reports import (assignment_summary, coverage_report, device_stats,
                        fleet_age_report, items_to_csv, items_to_rows,
-                       parse_iso)
+                       mosyle_os_breakdown, mosyle_stale_devices, parse_iso,
+                       reconcile_enrollments)
 
 CACHE_TTL = 300  # seconds
 MAX_TABLE_ROWS = 500
@@ -62,6 +63,9 @@ NAV = [
     ("Reports", [
         ("coverage", "/reports/coverage", "Coverage"),
         ("fleet_age", "/reports/fleet-age", "Fleet Age"),
+        ("mosyle_os_breakdown", "/reports/mosyle-os-breakdown", "Mosyle OS Versions"),
+        ("mosyle_stale", "/reports/mosyle-stale", "Mosyle Stale Devices"),
+        ("reconciliation", "/reports/reconciliation", "ABM ↔ Mosyle"),
     ]),
 ]
 
@@ -111,6 +115,15 @@ def fmt_date(value, with_time: bool = False):
     if not parsed:
         return value or "—"
     return parsed.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
+
+
+def _orgs_by_provider(cfg, provider: str) -> list[tuple[str, object]]:
+    return [(slug, org) for slug, org in cfg.orgs.items()
+            if org.provider == provider]
+
+
+def _has_both_providers(cfg) -> bool:
+    return bool(_orgs_by_provider(cfg, "apple")) and bool(_orgs_by_provider(cfg, "mosyle"))
 
 
 def create_app(demo: bool = False,
@@ -194,6 +207,25 @@ def create_app(demo: bool = False,
         app.state.cache[key] = (time.time(), value)
         return value
 
+    def cached_for(slug: str, name: str, fetch):
+        """Like cached(), but for an explicitly chosen org (used by the
+        cross-org reconciliation report, which can't rely on the single
+        active client). Shares app.state.cache keyed on the org's client_id,
+        so the active org's `devices` entry is reused rather than refetched."""
+        org = config.load().orgs.get(slug)
+        if org is None:
+            raise NoOrgError()
+        if slug not in app.state.clients:
+            app.state.clients[slug] = build_client(org)
+        c = app.state.clients[slug]
+        key = (c.org.client_id, name)
+        hit = app.state.cache.get(key)
+        if hit and time.time() - hit[0] < CACHE_TTL:
+            return hit[1]
+        value = fetch(c)
+        app.state.cache[key] = (time.time(), value)
+        return value
+
     def _snapshot_value(c, name: str):
         """Reconstruct a cache entry from the latest snapshot, if possible."""
         resource = SNAPSHOT_RESOURCES.get(name)
@@ -240,6 +272,11 @@ def create_app(demo: bool = False,
         scope = c.org.scope if c else "business"
         provider = c.org.provider if c else "apple"
         allowed = set(sections_for(scope, provider))
+        # Reconciliation is cross-org, so it isn't a per-org section: surface
+        # it whenever the config has at least one Apple AND one Mosyle org,
+        # regardless of which one is currently active.
+        if cfg and _has_both_providers(cfg):
+            allowed.add("reconciliation")
         nav = [(group, [item for item in items if item[0] in allowed or item[0] == "dashboard"])
                for group, items in NAV]
         nav = [(group, items) for group, items in nav if items]
@@ -672,12 +709,92 @@ def create_app(demo: bool = False,
         return render(request, "fleet_age.html", active="fleet_age",
                       report=_fleet_age(years), years=years)
 
+    @app.get("/reports/mosyle-os-breakdown", response_class=HTMLResponse)
+    def mosyle_os_page(request: Request):
+        guard("mosyle_os_breakdown")
+        devices = cached("devices", lambda c: c.devices())
+        return render(request, "mosyle_os.html", active="mosyle_os_breakdown",
+                      report=mosyle_os_breakdown(devices))
+
+    @app.get("/reports/mosyle-stale", response_class=HTMLResponse)
+    def mosyle_stale_page(request: Request, days: int = 30):
+        guard("mosyle_stale")
+        days = max(1, min(days, 365))
+        devices = cached("devices", lambda c: c.devices())
+        return render(request, "mosyle_stale.html", active="mosyle_stale",
+                      report=mosyle_stale_devices(devices, days), days=days)
+
+    def _reconciliation_pair(cfg, abm: str, mosyle: str):
+        """Resolve the (abm_slug, mosyle_slug) to compare: an explicit query
+        choice if valid, else the active org for its provider, else the first
+        org of that provider. Returns None if either provider is absent."""
+        apple_orgs = _orgs_by_provider(cfg, "apple")
+        mosyle_orgs = _orgs_by_provider(cfg, "mosyle")
+        if not apple_orgs or not mosyle_orgs:
+            return None
+        abm_slugs = [s for s, _ in apple_orgs]
+        mosyle_slugs = [s for s, _ in mosyle_orgs]
+        abm_slug = abm if abm in abm_slugs else (
+            cfg.active_org if cfg.active_org in abm_slugs else abm_slugs[0])
+        mosyle_slug = mosyle if mosyle in mosyle_slugs else (
+            cfg.active_org if cfg.active_org in mosyle_slugs else mosyle_slugs[0])
+        return apple_orgs, mosyle_orgs, abm_slug, mosyle_slug
+
+    def _reconcile(abm_slug: str, mosyle_slug: str) -> dict:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_abm = pool.submit(cached_for, abm_slug, "devices", lambda c: c.devices())
+            f_mosyle = pool.submit(cached_for, mosyle_slug, "devices", lambda c: c.devices())
+            return reconcile_enrollments(f_abm.result(), f_mosyle.result())
+
+    @app.get("/reports/reconciliation", response_class=HTMLResponse)
+    def reconciliation_page(request: Request, abm: str = "", mosyle: str = ""):
+        cfg = config.load()
+        pair = _reconciliation_pair(cfg, abm, mosyle)
+        if pair is None:
+            return render(request, "reconciliation.html", active="reconciliation",
+                          report=None, apple_orgs=_orgs_by_provider(cfg, "apple"),
+                          mosyle_orgs=_orgs_by_provider(cfg, "mosyle"),
+                          abm_slug="", mosyle_slug="", abm_name="", mosyle_name="")
+        apple_orgs, mosyle_orgs, abm_slug, mosyle_slug = pair
+        report = _reconcile(abm_slug, mosyle_slug)
+        return render(request, "reconciliation.html", active="reconciliation",
+                      report=report, apple_orgs=apple_orgs, mosyle_orgs=mosyle_orgs,
+                      abm_slug=abm_slug, mosyle_slug=mosyle_slug,
+                      abm_name=dict(apple_orgs)[abm_slug].name,
+                      mosyle_name=dict(mosyle_orgs)[mosyle_slug].name)
+
     # ---- exports ----------------------------------------------------------
 
     @app.get("/export/{resource}.csv")
-    def export_csv(resource: str, live: int = 0, days: int = 90, years: int = 4):
+    def export_csv(resource: str, live: int = 0, days: int = 90, years: int = 4,
+                   abm: str = "", mosyle: str = ""):
         if resource == "applecare":
             return _applecare_csv(live=bool(live))
+        if resource == "reconciliation":
+            pair = _reconciliation_pair(config.load(), abm, mosyle)
+            if pair is None:
+                raise ApiError(404, "Configure both an Apple and a Mosyle org "
+                                    "to reconcile enrollment.")
+            _a, _m, abm_slug, mosyle_slug = pair
+            report = _reconcile(abm_slug, mosyle_slug)
+            rows = [{"type": "reconciliation", "id": row["serial"], "attributes": row}
+                    for bucket in ("abm_only", "both", "mosyle_only")
+                    for row in report[bucket]]
+            return _csv_response(items_to_csv(rows), "reconciliation.csv")
+        if resource == "mosyle-os-breakdown":
+            guard("mosyle_os_breakdown")
+            report = mosyle_os_breakdown(cached("devices", lambda c: c.devices()))
+            rows = [{"type": "osVersion", "id": version,
+                     "attributes": {"osVersion": version, "count": count, "percent": pct}}
+                    for version, count, pct in report["rows"]]
+            return _csv_response(items_to_csv(rows), "mosyle-os-breakdown.csv")
+        if resource == "mosyle-stale":
+            guard("mosyle_stale")
+            days = max(1, min(days, 365))
+            report = mosyle_stale_devices(cached("devices", lambda c: c.devices()), days)
+            rows = [{"type": "stale", "id": row["serial"], "attributes": row}
+                    for row in report["rows"]]
+            return _csv_response(items_to_csv(rows), f"mosyle-stale-{days}d.csv")
         if resource == "refresh-candidates":
             guard("fleet_age")
             report = _fleet_age(max(1, min(years, 10)))

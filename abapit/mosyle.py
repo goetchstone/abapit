@@ -68,7 +68,13 @@ _FIELD_MAP = {
     "wifi_mac_address": "wifiMacAddress",
     "bluetooth_mac_address": "bluetoothMacAddress",
     "ethernet_mac_address": "ethernetMacAddress",
+    "enrollment_type": "enrollmentType",
+    "managementstatus": "managementStatus",
+    "username": "userName",
+    # Mosyle returns the signed-in user under a few casings depending on
+    # endpoint/platform; map them all to the canonical currentUser.
     "CurrentConsoleManagedUser": "currentUser",
+    "currentconsolemanageduser": "currentUser",
 }
 
 # Epoch-seconds fields -> ISO 8601 (what abapit's date filters parse).
@@ -79,8 +85,19 @@ _DATE_MAP = {
 }
 
 
-def _iso_from_epoch(value) -> str | None:
-    """Mosyle timestamps are usually Unix epoch seconds; render as ISO Z."""
+def _to_iso(value) -> str | None:
+    """Normalize a Mosyle timestamp to an ISO-8601-ish string.
+
+    Mosyle usually sends Unix epoch seconds, but some fields/tenants return a
+    date or datetime string already. Keep date-ish strings as-is (a leading
+    4-digit year with a dash — reports.parse_iso reads both date and datetime
+    forms); convert epoch ints/numeric strings; return None for anything else
+    so junk never reaches a date column or CSV cell.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, str) and value[:4].isdigit() and "-" in value:
+        return value  # already a date / datetime string
     try:
         return datetime.fromtimestamp(int(value), tz=timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ")
@@ -113,7 +130,7 @@ def adapt_device(raw: dict) -> dict:
             consumed.add(src)
     for src, dst in _DATE_MAP.items():
         if src in raw:
-            attrs[dst] = _iso_from_epoch(raw[src]) or raw[src]
+            attrs[dst] = _to_iso(raw[src])
             consumed.add(src)
     if not attrs.get("deviceModel"):
         attrs["deviceModel"] = raw.get("model_name", "")
@@ -196,18 +213,29 @@ class MosyleClient:
 
     # -- devices ----------------------------------------------------------
 
+    PAGE_SIZE = 1000
+
     def devices(self) -> list[dict]:
-        """Every device, adapted to JSON:API shape. Pages defensively: stops
-        when a page surfaces no new serials, so it terminates whether Mosyle
-        paginates by `page` or returns the whole fleet at once."""
+        """Every device, adapted to JSON:API shape. Requests a large page_size
+        and pages by incrementing `page`, stopping when a page surfaces no new
+        serials — so it terminates whether Mosyle paginates by `page` or
+        returns the whole fleet at once.
+
+        Caveat (see module docstring): if a tenant ignores `page` and uses
+        offset/cursor paging instead, this fetches only the first page. The
+        per-page count is logged so that's noticeable; confirm against a real
+        tenant with a >page_size fleet and adjust if a response differs.
+        """
         items: list[dict] = []
         seen: set[str] = set()
         page = 1
         while page <= self.max_pages:
-            body = self._post("devices", "list", {"page": page})
+            body = self._post("devices", "list",
+                              {"page": page, "page_size": self.PAGE_SIZE})
             rows = self._rows(body)
             fresh = [r for r in rows
                      if (r.get("serial_number") or r.get("deviceudid")) not in seen]
+            log.info("Mosyle devices page %d: %d rows, %d new", page, len(rows), len(fresh))
             if not fresh:
                 break
             for row in fresh:

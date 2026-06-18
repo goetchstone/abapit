@@ -188,6 +188,18 @@ def _unique_slug(cfg: Config, name: str) -> str:
     return slug
 
 
+def _assert_unique_client_id(cfg: Config, client_id: str) -> None:
+    """The client_id keys the token cache, the request cache, and snapshot
+    history — so two orgs sharing one would silently cross-contaminate each
+    other's data. Reject a duplicate at add time (e.g. the same ABM API
+    account pasted twice, or an Apple org set to a Mosyle org's id)."""
+    if any(org.client_id == client_id for org in cfg.orgs.values()):
+        raise ValueError(
+            f"client ID {client_id!r} is already used by another org. Each "
+            "org needs a distinct client ID — it keys the token cache, the "
+            "request cache, and snapshot history.")
+
+
 def add_org(
     name: str,
     scope: str = "business",
@@ -219,6 +231,7 @@ def add_org(
             raise ValueError(f"could not read key file: {exc}") from exc
 
     cfg = load()
+    _assert_unique_client_id(cfg, client_id.strip())
     slug = _unique_slug(cfg, name)
 
     # Always store our own validated, normalized copy with 0600 perms.
@@ -248,11 +261,13 @@ def _add_mosyle_org(name: str, mosyle_token: str, role: str = "") -> str:
         raise ValueError("provide the Mosyle API access token")
     cfg = load()
     slug = _unique_slug(cfg, name)
+    client_id = f"mosyle.{slug}"
+    _assert_unique_client_id(cfg, client_id)  # guard against an Apple org squatting it
     cfg.orgs[slug] = Org(
         name=name,
         scope="business",
         provider="mosyle",
-        client_id=f"mosyle.{slug}",
+        client_id=client_id,
         key_id="",
         private_key_path="",
         mosyle_token=mosyle_token.strip(),

@@ -147,7 +147,12 @@ def test_no_mdm_servers_for_mosyle():
 
 
 def test_sections_for_provider():
-    assert sections_for("business", "mosyle") == ("devices",)
+    mosyle_sections = sections_for("business", "mosyle")
+    assert "devices" in mosyle_sections
+    assert "mosyle_os_breakdown" in mosyle_sections
+    assert "mosyle_stale" in mosyle_sections
+    assert "users" not in mosyle_sections          # Apple-only inventory
+    assert "reconciliation" not in mosyle_sections  # cross-org, gated in render()
     assert "users" in sections_for("business", "apple")
     assert "users" not in sections_for("school", "apple")
 
@@ -167,6 +172,36 @@ def test_add_mosyle_org_requires_token(tmp_path, monkeypatch):
     monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path))
     with pytest.raises(ValueError):
         config.add_org(name="No Token", provider="mosyle", mosyle_token="")
+
+
+def test_to_iso_normalization():
+    from abapit.mosyle import _to_iso
+    assert _to_iso(1718000000).startswith("2024-06-10")        # epoch int
+    assert _to_iso("1718000000").startswith("2024-06-10")      # epoch numeric string
+    assert _to_iso("2024-06-10T12:00:00Z") == "2024-06-10T12:00:00Z"  # ISO passthrough
+    assert _to_iso("2024-06-10") == "2024-06-10"               # date-only kept
+    assert _to_iso("not a date") is None                       # junk dropped, per contract
+    assert _to_iso(None) is None and _to_iso("") is None
+
+
+def test_duplicate_client_id_rejected(tmp_path, monkeypatch, ec_key_pair):
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path))
+    key_path, _ = ec_key_pair
+    config.add_org(name="ABM One", scope="business", client_id="BUSINESSAPI.dup",
+                   key_id="k", private_key_path=str(key_path))
+    with pytest.raises(ValueError, match="already used"):
+        config.add_org(name="ABM Two", scope="business", client_id="BUSINESSAPI.dup",
+                       key_id="k2", private_key_path=str(key_path))
+
+
+def test_apple_org_cannot_squat_mosyle_synthetic_id(tmp_path, monkeypatch, ec_key_pair):
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path))
+    key_path, _ = ec_key_pair
+    mosyle_slug = config.add_org(name="Acme", provider="mosyle", mosyle_token="tok")
+    with pytest.raises(ValueError, match="already used"):
+        config.add_org(name="Sneaky", scope="business",
+                       client_id=f"mosyle.{mosyle_slug}", key_id="k",
+                       private_key_path=str(key_path))
 
 
 def test_web_renders_mosyle_through_templates(tmp_path, monkeypatch):
@@ -209,3 +244,130 @@ def test_web_renders_mosyle_through_templates(tmp_path, monkeypatch):
     detail = client.get("/devices/MOSY-1")
     assert detail.status_code == 200
     assert b"Managed by" in detail.content   # not the MDM-assignment panel
+
+
+# ---- reconciliation + posture report pages ----------------------------------
+
+class _FakeClient:
+    is_demo = False
+
+    def __init__(self, org, devices):
+        self.org = org
+        self._devices = devices
+
+    def devices(self):
+        return self._devices
+
+    def mdm_servers(self):
+        return []
+
+    def mdm_server_device_ids(self, server_id):
+        return []
+
+    def device(self, device_id):
+        return next((d for d in self._devices if d["id"] == device_id), {})
+
+    def device_applecare(self, device_id):
+        return []
+
+    def device_assigned_server(self, device_id):
+        return None
+
+    def ping(self):
+        return None
+
+    def close(self):
+        return None
+
+
+def _abm_item(serial, status="ASSIGNED"):
+    return {"type": "orgDevices", "id": serial, "attributes": {
+        "serialNumber": serial, "status": status, "productFamily": "Mac",
+        "deviceModel": "MacBook Air", "addedToOrgDateTime": "2025-01-01T00:00:00Z"}}
+
+
+def _mos_item(serial, days=1):
+    from datetime import datetime, timedelta, timezone
+    checkin = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"type": "orgDevices", "id": serial, "attributes": {
+        "serialNumber": serial, "status": "active", "productFamily": "Mac",
+        "deviceModel": "MacBook Air", "osVersion": "15.5", "lastCheckIn": checkin,
+        "currentUser": "sarah@acme.com", "managedBy": "Mosyle"}}
+
+
+def _fake_build(org):
+    if org.provider == "mosyle":
+        return _FakeClient(org, [_mos_item("A1"), _mos_item("M1", days=99)])
+    return _FakeClient(org, [_abm_item("A1"), _abm_item("A2")])
+
+
+def _two_org_client(tmp_path, monkeypatch, ec_key_pair, both=True):
+    """Configure an Apple org (+ optionally a Mosyle org) and return a
+    TestClient with build_client faked. Apple org is active."""
+    from fastapi.testclient import TestClient
+
+    import abapit.web.app as app_mod
+
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("ABAPIT_DATA_DIR", str(tmp_path / "data"))
+    key_path, _ = ec_key_pair
+    abm_slug = config.add_org(name="Acme ABM", scope="business",
+                              client_id="BUSINESSAPI.x", key_id="k",
+                              private_key_path=str(key_path))
+    mosyle_slug = None
+    if both:
+        mosyle_slug = config.add_org(name="Acme Mosyle", provider="mosyle",
+                                     mosyle_token="tok")
+    monkeypatch.setattr(app_mod, "build_client", _fake_build)
+    client = TestClient(app_mod.create_app(), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    return client, abm_slug, mosyle_slug
+
+
+def test_reconciliation_page_buckets_and_nav(tmp_path, monkeypatch, ec_key_pair):
+    client, _abm, _mosyle = _two_org_client(tmp_path, monkeypatch, ec_key_pair)
+    resp = client.get("/reports/reconciliation")
+    assert resp.status_code == 200
+    body = resp.content
+    assert b"A2" in body and b"M1" in body          # abm_only + mosyle_only shown
+    assert b"/reports/reconciliation" in body        # nav link present
+    assert b"%" in body                              # enrollment-rate KPI rendered
+
+
+def test_reconciliation_requires_both_providers(tmp_path, monkeypatch, ec_key_pair):
+    client, _abm, _none = _two_org_client(tmp_path, monkeypatch, ec_key_pair, both=False)
+    resp = client.get("/reports/reconciliation")
+    assert resp.status_code == 200
+    assert b"Configure" in resp.content and b"both" in resp.content  # banner, not a crash
+
+
+def test_mosyle_posture_pages_render_for_mosyle_org(tmp_path, monkeypatch, ec_key_pair):
+    client, _abm, mosyle_slug = _two_org_client(tmp_path, monkeypatch, ec_key_pair)
+    config.set_active(mosyle_slug)
+    os_page = client.get("/reports/mosyle-os-breakdown")
+    assert os_page.status_code == 200 and b"15.5" in os_page.content
+    stale = client.get("/reports/mosyle-stale?days=30")
+    assert stale.status_code == 200 and b"M1" in stale.content  # 99d stale shown
+    assert b"A1" not in stale.content or b"Never" in stale.content  # A1 (1d) excluded
+
+
+def test_mosyle_posture_gated_off_apple_org(tmp_path, monkeypatch, ec_key_pair):
+    client, _abm, _mosyle = _two_org_client(tmp_path, monkeypatch, ec_key_pair)
+    # Apple org is active → posture sections are not available.
+    assert b"not available" in client.get("/reports/mosyle-os-breakdown").content
+    assert b"not available" in client.get("/reports/mosyle-stale").content
+
+
+def test_report_csv_exports(tmp_path, monkeypatch, ec_key_pair):
+    client, abm_slug, mosyle_slug = _two_org_client(tmp_path, monkeypatch, ec_key_pair)
+    recon = client.get(f"/export/reconciliation.csv?abm={abm_slug}&mosyle={mosyle_slug}")
+    assert recon.status_code == 200
+    assert recon.headers["content-type"].startswith("text/csv")
+    assert "attachment" in recon.headers["content-disposition"]
+    assert b"M1" in recon.content and b"A2" in recon.content
+
+    config.set_active(mosyle_slug)
+    os_csv = client.get("/export/mosyle-os-breakdown.csv")
+    assert os_csv.status_code == 200 and os_csv.headers["content-type"].startswith("text/csv")
+    stale_csv = client.get("/export/mosyle-stale.csv?days=30")
+    assert stale_csv.status_code == 200 and b"M1" in stale_csv.content

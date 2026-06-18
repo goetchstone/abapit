@@ -45,9 +45,11 @@ BUSINESS_SECTIONS = (
 )
 SCHOOL_SECTIONS = ("devices", "mdm_servers", "changes", "coverage",
                    "fleet_age", "assign")
-# Mosyle is read-only here for now and starts with device inventory only;
-# reports and actions land in later phases.
-MOSYLE_SECTIONS = ("devices",)
+# Mosyle is read-only here for now: device inventory plus posture reports
+# (OS-version spread, stale check-ins) that ABM structurally can't provide.
+# The ABM<->Mosyle reconciliation report is cross-org, so it is gated in
+# render() by "both providers configured" rather than via this per-org list.
+MOSYLE_SECTIONS = ("devices", "mosyle_os_breakdown", "mosyle_stale")
 
 
 def sections_for(scope: str, provider: str = "apple") -> tuple[str, ...]:
