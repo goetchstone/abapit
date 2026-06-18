@@ -51,7 +51,7 @@ table.kv td:last-child{text-align:right}
       <tr><td>Added to ABM</td><td>{{ aattr.addedToOrgDateTime | dt }}</td></tr>
       <tr><td>Status</td><td><span class="pill {{ aattr.status | lower }}">{{ aattr.status or '—' }}</span></td></tr>
       <tr><td>Assigned MDM</td><td>
-        {% if abm.server %}<a href="/mdm-servers/{{ abm.server.id }}">{{ abm.server.attributes.get('serverName', abm.server.id) }}</a>
+        {% if abm.server and abm.server.attributes %}<a href="/mdm-servers/{{ abm.server.id }}">{{ abm.server.attributes.get('serverName', abm.server.id) }}</a>
         {% else %}<span class="warn-text">none</span>{% endif %}</td></tr>
     </table>
     <h3 class="spaced">AppleCare &amp; warranty</h3>
@@ -82,9 +82,9 @@ table.kv td:last-child{text-align:right}
   </section>
   {% endif %}
 
-  {% if timeline %}
   <section class="panel wide">
     <h2>Activity <span class="muted">digested from both systems</span></h2>
+    {% if timeline %}
     <table>
       <thead><tr><th>When</th><th>Event</th><th>Source</th></tr></thead>
       <tbody>
@@ -97,8 +97,10 @@ table.kv td:last-child{text-align:right}
       {% endfor %}
       </tbody>
     </table>
+    {% else %}
+    <p class="muted">No activity recorded yet.</p>
+    {% endif %}
   </section>
-  {% endif %}
 
   {% if servers and 'assign' in allowed %}
   <section class="panel">

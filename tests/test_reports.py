@@ -158,6 +158,17 @@ def test_mosyle_os_breakdown_sorted_unknown_last():
     assert round(sum(p for _, _, p in report["rows"])) == 100
 
 
+def test_parse_iso_coerces_naive_to_utc():
+    from abapit.reports import parse_iso
+    # Mosyle can return a date-only or tz-less string; it must come back aware
+    # so arithmetic against tz-aware "now" never throws (the fmt_ago crash).
+    assert parse_iso("2025-01-01T12:00:00").tzinfo is timezone.utc
+    assert parse_iso("2025-06-10").tzinfo is timezone.utc
+    assert parse_iso("2025-06-10T12:00:00Z").utcoffset() == timedelta(0)
+    # arithmetic that previously raised now works
+    (datetime.now(timezone.utc) - parse_iso("2025-01-01")).total_seconds()
+
+
 def test_device_timeline_merges_sources_reverse_chronological():
     from abapit.reports import device_timeline
     abm = {"orderDateTime": "2025-01-01T00:00:00Z",

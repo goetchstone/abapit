@@ -161,10 +161,9 @@ def _find_serial(devices: list[dict], device_id: str):
 def _other_provider_slug(cfg, provider: str):
     """Slug of an org of the OTHER provider, to merge into a device 360."""
     orgs = _orgs_by_provider(cfg, "mosyle" if provider == "apple" else "apple")
-    if not orgs:
-        return None
-    slugs = [s for s, _ in orgs]
-    return cfg.active_org if cfg.active_org in slugs else slugs[0]
+    # active_org belongs to the current provider, never the other one, so it's
+    # always the first org of the other provider.
+    return orgs[0][0] if orgs else None
 
 
 def _abm_audit(c, serial: str, days: int = 30) -> list[dict]:
@@ -521,6 +520,8 @@ def create_app(demo: bool = False,
                     apple_side = None
 
         abm_device = (apple_side or {}).get("device") or {}
+        if not abm_device and not mosyle_side:
+            raise ApiError(404, "Device not found in this org.")
         timeline = device_timeline(abm_device.get("attributes"),
                                    (mosyle_side or {}).get("attributes"), abm_audit)
         servers = []

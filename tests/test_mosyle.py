@@ -434,6 +434,13 @@ def test_device_360_merges_both_providers(tmp_path, monkeypatch, ec_key_pair):
     assert b"Activity" in body                      # digested per-device timeline
 
 
+def test_device_360_unknown_serial_is_404(tmp_path, monkeypatch, ec_key_pair):
+    client, _abm, mosyle_slug = _two_org_client(tmp_path, monkeypatch, ec_key_pair)
+    config.set_active(mosyle_slug)  # active Mosyle org returns None for unknown serials
+    resp = client.get("/devices/NOPE-999")
+    assert b"not found" in resp.content.lower()  # 404 page, not a blank misleading record
+
+
 def test_report_csv_exports(tmp_path, monkeypatch, ec_key_pair):
     client, abm_slug, mosyle_slug = _two_org_client(tmp_path, monkeypatch, ec_key_pair)
     recon = client.get(f"/export/reconciliation.csv?abm={abm_slug}&mosyle={mosyle_slug}")

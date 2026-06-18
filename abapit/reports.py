@@ -12,9 +12,14 @@ def parse_iso(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    # Mosyle can return a naive date/datetime string; treat it as UTC so
+    # arithmetic against tz-aware "now" (in fmt_ago, the reports) never throws.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def device_stats(devices: list[dict]) -> dict:
