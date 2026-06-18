@@ -303,7 +303,8 @@ def test_web_renders_mosyle_through_templates(tmp_path, monkeypatch):
 
     detail = client.get("/devices/MOSY-1")
     assert detail.status_code == 200
-    assert b"Managed by" in detail.content   # not the MDM-assignment panel
+    assert b"Managed in Mosyle" in detail.content   # single-provider 360
+    assert b"15.5" in detail.content                # live OS from Mosyle
 
 
 # ---- reconciliation + posture report pages ----------------------------------
@@ -332,6 +333,9 @@ class _FakeClient:
 
     def device_assigned_server(self, device_id):
         return None
+
+    def audit_events(self, start_iso, end_iso, event_type=""):
+        return []
 
     def ping(self):
         return None
@@ -416,6 +420,18 @@ def test_mosyle_posture_gated_off_apple_org(tmp_path, monkeypatch, ec_key_pair):
     # Apple org is active → posture sections are not available.
     assert b"not available" in client.get("/reports/mosyle-os-breakdown").content
     assert b"not available" in client.get("/reports/mosyle-stale").content
+
+
+def test_device_360_merges_both_providers(tmp_path, monkeypatch, ec_key_pair):
+    # Active org is the Apple one; A1 exists in both ABM and Mosyle.
+    client, _abm, _mosyle = _two_org_client(tmp_path, monkeypatch, ec_key_pair)
+    resp = client.get("/devices/A1")
+    assert resp.status_code == 200
+    body = resp.content
+    assert b"Owned &amp; managed" in body          # present in both
+    assert b"ASSIGNED" in body                      # ABM ownership half
+    assert b"15.5" in body                          # Mosyle live half (osVersion)
+    assert b"Activity" in body                      # digested per-device timeline
 
 
 def test_report_csv_exports(tmp_path, monkeypatch, ec_key_pair):

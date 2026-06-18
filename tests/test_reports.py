@@ -158,6 +158,26 @@ def test_mosyle_os_breakdown_sorted_unknown_last():
     assert round(sum(p for _, _, p in report["rows"])) == 100
 
 
+def test_device_timeline_merges_sources_reverse_chronological():
+    from abapit.reports import device_timeline
+    abm = {"orderDateTime": "2025-01-01T00:00:00Z",
+           "addedToOrgDateTime": "2025-01-08T00:00:00Z"}
+    mosyle = {"enrolledAt": "2025-01-09T00:00:00Z",
+              "lastCheckIn": "2025-06-01T12:00:00Z"}
+    audit = [{"attributes": {"eventDateTime": "2025-02-01T00:00:00Z",
+                             "type": "DEVICE_ASSIGNED_TO_MDM", "outcome": "SUCCESS"}}]
+    timeline = device_timeline(abm, mosyle, audit)
+    whens = [i["when"] for i in timeline]
+    assert whens == sorted(whens, reverse=True)          # newest first
+    assert timeline[0]["label"] == "Last seen (heartbeat)"  # the June check-in
+    sources = {i["source"] for i in timeline}
+    assert sources == {"ABM", "Mosyle"}
+    assert any("Device Assigned To Mdm" in i["label"] for i in timeline)  # audit titled
+    # Missing/empty timestamps are dropped, not rendered blank.
+    assert device_timeline(None, None, None) == []
+    assert all(i["when"] for i in timeline)
+
+
 def test_mosyle_stale_devices_threshold_and_never():
     from abapit.reports import mosyle_stale_devices
     devices = [_mos("FRESH", checkin_days=2), _mos("OLD", checkin_days=40),

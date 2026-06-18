@@ -243,6 +243,37 @@ def reconcile_enrollments(abm_devices: list[dict],
             "both": both, "summary": summary}
 
 
+def device_timeline(abm_attrs: dict | None, mosyle_attrs: dict | None,
+                    audit_events: list[dict] | None = None) -> list[dict]:
+    """Digest one device's signals from both sources into a single reverse-
+    chronological activity list — the per-device 'what happened' view neither
+    ABM nor Mosyle gives alone. Each item: {when, kind, label, source}."""
+    abm = abm_attrs or {}
+    mosyle = mosyle_attrs or {}
+    items: list[dict] = []
+
+    def add(when, kind, label, source):
+        if when:
+            items.append({"when": when, "kind": kind, "label": label, "source": source})
+
+    add(abm.get("orderDateTime"), "ordered", "Ordered", "ABM")
+    add(abm.get("addedToOrgDateTime"), "added", "Added to Apple Business Manager", "ABM")
+    for event in (audit_events or []):
+        attrs = event.get("attributes", {})
+        label = attrs.get("type", "event").replace("_", " ").title()
+        outcome = attrs.get("outcome", "")
+        add(attrs.get("eventDateTime"), "audit",
+            f"{label} · {outcome}".strip(" ·") if outcome else label, "ABM")
+
+    add(mosyle.get("enrolledAt"), "enrolled", "Enrolled in Mosyle", "Mosyle")
+    add(mosyle.get("lastMdmCheckIn"), "checkin", "MDM check-in", "Mosyle")
+    add(mosyle.get("lastPush"), "push", "Last MDM push", "Mosyle")
+    add(mosyle.get("lastCheckIn"), "beat", "Last seen (heartbeat)", "Mosyle")
+
+    items.sort(key=lambda i: i["when"], reverse=True)
+    return items
+
+
 def mosyle_os_breakdown(devices: list[dict]) -> dict:
     """OS-version distribution across a Mosyle fleet — patch posture ABM
     can't see. Missing versions bucket as 'Unknown', sorted last."""

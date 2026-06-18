@@ -31,9 +31,9 @@ from ..client import ApiError, sections_for
 from ..demo import DemoClient
 from ..factory import build_client
 from ..reports import (assignment_summary, coverage_report, device_stats,
-                       fleet_age_report, items_to_csv, items_to_rows,
-                       mosyle_os_breakdown, mosyle_stale_devices, parse_iso,
-                       reconcile_enrollments)
+                       device_timeline, fleet_age_report, items_to_csv,
+                       items_to_rows, mosyle_os_breakdown, mosyle_stale_devices,
+                       parse_iso, reconcile_enrollments)
 
 CACHE_TTL = 300  # seconds
 MAX_TABLE_ROWS = 500
@@ -117,6 +117,33 @@ def fmt_date(value, with_time: bool = False):
     return parsed.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
 
 
+def fmt_ago(value):
+    """Relative 'last seen' for the device-360 posture strip."""
+    parsed = parse_iso(value) if isinstance(value, str) else None
+    if not parsed:
+        return "—"
+    secs = (datetime.now(timezone.utc) - parsed).total_seconds()
+    if secs < 0:
+        return fmt_date(value, with_time=True)
+    if secs < 90:
+        return "just now"
+    if secs < 5400:
+        return f"{int(secs // 60)} min ago"
+    if secs < 129600:
+        return f"{int(secs // 3600)} h ago"
+    return f"{int(secs // 86400)} d ago"
+
+
+def fmt_yesno(value):
+    """Mosyle returns booleans as '1'/'0' strings; render them readably."""
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes"):
+        return "Yes"
+    if text in ("0", "false", "no", "", "none"):
+        return "No"
+    return value
+
+
 def _orgs_by_provider(cfg, provider: str) -> list[tuple[str, object]]:
     return [(slug, org) for slug, org in cfg.orgs.items()
             if org.provider == provider]
@@ -124,6 +151,38 @@ def _orgs_by_provider(cfg, provider: str) -> list[tuple[str, object]]:
 
 def _has_both_providers(cfg) -> bool:
     return bool(_orgs_by_provider(cfg, "apple")) and bool(_orgs_by_provider(cfg, "mosyle"))
+
+
+def _find_serial(devices: list[dict], device_id: str):
+    key = (device_id or "").strip().upper()
+    return next((d for d in devices if (d.get("id") or "").strip().upper() == key), None)
+
+
+def _other_provider_slug(cfg, provider: str):
+    """Slug of an org of the OTHER provider, to merge into a device 360."""
+    orgs = _orgs_by_provider(cfg, "mosyle" if provider == "apple" else "apple")
+    if not orgs:
+        return None
+    slugs = [s for s, _ in orgs]
+    return cfg.active_org if cfg.active_org in slugs else slugs[0]
+
+
+def _abm_audit(c, serial: str, days: int = 30) -> list[dict]:
+    """Best-effort ABM audit events naming this serial (device lifecycle:
+    added, assigned/unassigned). Empty if the role can't read audit events."""
+    if "audit_events" not in sections_for(c.org.scope, c.org.provider):
+        return []
+    try:
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=days)
+        events = c.audit_events(start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                end.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    except (ApiError, AuthError):
+        return []
+    key = (serial or "").strip().upper()
+    return [e for e in events
+            if str(e.get("attributes", {}).get("subjectId", "")).strip().upper() == key
+            or str(e.get("attributes", {}).get("subjectName", "")).strip().upper() == key][:20]
 
 
 def create_app(demo: bool = False,
@@ -134,6 +193,8 @@ def create_app(demo: bool = False,
     templates = Jinja2Templates(directory=base / "templates")
     templates.env.filters["dt"] = fmt_date
     templates.env.filters["dtt"] = lambda v: fmt_date(v, with_time=True)
+    templates.env.filters["ago"] = fmt_ago
+    templates.env.filters["yesno"] = fmt_yesno
 
     # Reject requests whose Host header isn't ours — blocks DNS-rebinding
     # attacks, where a malicious site points its own domain at 127.0.0.1.
@@ -421,19 +482,53 @@ def create_app(demo: bool = False,
 
     @app.get("/devices/{device_id}", response_class=HTMLResponse)
     def device_page(request: Request, device_id: str):
-        def fetch_detail(c):
-            # Three independent calls — fetch concurrently (~1 RTT, not 3).
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                f_device = pool.submit(c.device, device_id)
-                f_coverage = pool.submit(c.device_applecare, device_id)
-                f_server = pool.submit(c.device_assigned_server, device_id)
-                return f_device.result(), f_coverage.result(), f_server.result()
+        """Device 360: the active org's half, merged with the other provider's
+        half (when configured) and a digested per-device activity timeline."""
+        c = client()
 
-        device, coverage, server = cached(f"device:{device_id}", fetch_detail)
-        servers = cached("mdm_servers", lambda cc: cc.mdm_servers())
+        def abm_detail(cc):
+            # Three independent ABM calls — fetch concurrently (~1 RTT, not 3).
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                f_device = pool.submit(cc.device, device_id)
+                f_coverage = pool.submit(cc.device_applecare, device_id)
+                f_server = pool.submit(cc.device_assigned_server, device_id)
+                return {"device": f_device.result(), "coverage": f_coverage.result(),
+                        "server": f_server.result()}
+
+        apple_side = mosyle_side = None
+        abm_audit: list = []
+        if c.org.provider == "mosyle":
+            mosyle_side = _find_serial(cached("devices", lambda cc: cc.devices()), device_id)
+        else:
+            apple_side = cached(f"device:{device_id}", abm_detail)
+            abm_audit = _abm_audit(c, device_id)
+
+        # Merge the other provider's half, if one is configured (not in demo).
+        if not app.state.demo:
+            cfg = config.load()
+            other = _other_provider_slug(cfg, c.org.provider)
+            if other and c.org.provider == "apple":
+                try:
+                    mosyle_side = _find_serial(
+                        cached_for(other, "devices", lambda cc: cc.devices()), device_id)
+                except (ApiError, AuthError):
+                    mosyle_side = None
+            elif other:
+                try:
+                    apple_side = cached_for(other, f"device:{device_id}", abm_detail)
+                    abm_audit = _abm_audit(app.state.clients[other], device_id)
+                except (ApiError, AuthError):
+                    apple_side = None
+
+        abm_device = (apple_side or {}).get("device") or {}
+        timeline = device_timeline(abm_device.get("attributes"),
+                                   (mosyle_side or {}).get("attributes"), abm_audit)
+        servers = []
+        if "assign" in sections_for(c.org.scope, c.org.provider):
+            servers = cached("mdm_servers", lambda cc: cc.mdm_servers())
         return render(request, "device_detail.html", active="devices",
-                      device=device, coverage=coverage, server=server,
-                      servers=servers)
+                      device_id=device_id, abm=apple_side, mosyle=mosyle_side,
+                      timeline=timeline, servers=servers)
 
     @app.get("/mdm-servers", response_class=HTMLResponse)
     def mdm_servers_page(request: Request):
