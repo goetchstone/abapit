@@ -54,10 +54,13 @@ class Org:
     capabilities: dict = field(default_factory=dict)  # section -> probe status
     probed_at: str = ""
     # "apple" (Business/School Manager) or "mosyle" (Mosyle Business MDM).
-    # The Apple credential fields above are unused for mosyle orgs, which
-    # authenticate with a single API access token instead of a signed JWT.
+    # The Apple credential fields above are unused for mosyle orgs. Mosyle's
+    # JWT auth needs the API access token PLUS an admin email/password, which
+    # are exchanged at /login for a 24h Bearer token (Basic auth is deprecated).
     provider: str = "apple"
     mosyle_token: str = ""
+    mosyle_email: str = ""
+    mosyle_password: str = ""
 
     @property
     def issuer(self) -> str:
@@ -87,6 +90,8 @@ class Org:
             "probed_at": self.probed_at,
             "provider": self.provider,
             "mosyle_token": self.mosyle_token,
+            "mosyle_email": self.mosyle_email,
+            "mosyle_password": self.mosyle_password,
         }
 
 
@@ -211,10 +216,12 @@ def add_org(
     role: str = "",
     provider: str = "apple",
     mosyle_token: str = "",
+    mosyle_email: str = "",
+    mosyle_password: str = "",
 ) -> str:
     """Add an org profile and make it active if it is the first one."""
     if provider == "mosyle":
-        return _add_mosyle_org(name, mosyle_token, role)
+        return _add_mosyle_org(name, mosyle_token, mosyle_email, mosyle_password, role)
     if provider != "apple":
         raise ValueError(f"provider must be 'apple' or 'mosyle', got {provider!r}")
     if scope not in ("business", "school"):
@@ -252,11 +259,12 @@ def add_org(
     return slug
 
 
-def _add_mosyle_org(name: str, mosyle_token: str, role: str = "") -> str:
-    """Add a Mosyle Business org. No private key — just the API access
-    token from Mosyle's API Integration profile. The client_id is synthetic
-    (it only needs to be stable and unique, since it keys the cache and
-    snapshot history)."""
+def _add_mosyle_org(name: str, mosyle_token: str, mosyle_email: str = "",
+                    mosyle_password: str = "", role: str = "") -> str:
+    """Add a Mosyle Business org. No private key — the API access token from
+    Mosyle's API Integration profile, plus the admin email/password that
+    /login exchanges for a Bearer token. The client_id is synthetic (it only
+    needs to be stable and unique, since it keys the cache and history)."""
     if not mosyle_token.strip():
         raise ValueError("provide the Mosyle API access token")
     cfg = load()
@@ -271,6 +279,8 @@ def _add_mosyle_org(name: str, mosyle_token: str, role: str = "") -> str:
         key_id="",
         private_key_path="",
         mosyle_token=mosyle_token.strip(),
+        mosyle_email=mosyle_email.strip(),
+        mosyle_password=mosyle_password,
         role=role.strip(),
     )
     if not cfg.active_org:

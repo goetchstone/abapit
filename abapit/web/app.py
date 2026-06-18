@@ -872,11 +872,13 @@ def create_app(demo: bool = False,
         return RedirectResponse(f"/settings?msg={quote(msg)}", status_code=303)
 
     @app.post("/settings/orgs/mosyle")
-    def settings_add_mosyle(name: str = Form(...), token: str = Form("")):
+    def settings_add_mosyle(name: str = Form(...), token: str = Form(""),
+                            email: str = Form(""), password: str = Form("")):
         try:
-            config.add_org(name=name, provider="mosyle", mosyle_token=token.strip())
-            msg = (f"Added Mosyle org {name!r}. Click Test to verify the token, "
-                   "then Use to switch to it.")
+            config.add_org(name=name, provider="mosyle", mosyle_token=token.strip(),
+                           mosyle_email=email.strip(), mosyle_password=password)
+            msg = (f"Added Mosyle org {name!r}. Click Test to verify the "
+                   "credentials, then Use to switch to it.")
         except ValueError as exc:
             msg = f"Could not add Mosyle org: {exc}"
         return RedirectResponse(f"/settings?msg={quote(msg)}", status_code=303)

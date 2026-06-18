@@ -9,10 +9,21 @@ from abapit.config import Org
 from abapit.mosyle import MosyleClient, adapt_device
 
 
-def mosyle_org(token="tok-123"):
+def mosyle_org(token="tok-123", email="", password=""):
     return Org(name="Acme Mosyle", scope="business", client_id="mosyle.acme",
                key_id="", private_key_path="", provider="mosyle",
-               mosyle_token=token)
+               mosyle_token=token, mosyle_email=email, mosyle_password=password)
+
+
+def devices_envelope(devices):
+    """The real Mosyle list response shape."""
+    return {"status": "OK", "response": [
+        {"devices": devices, "rows": len(devices), "page": 1, "page_size": 50}]}
+
+
+def not_found_envelope():
+    return {"status": "OK", "response": [
+        {"devices_notfound": [], "status": "DEVICES_NOTFOUND", "info": "No devices found"}]}
 
 
 SAMPLE = {
@@ -61,61 +72,112 @@ def test_family_derivation(os_value, model, expected):
     assert item["attributes"]["productFamily"] == expected
 
 
-def test_devices_paginates_until_no_new_serials():
-    pages = {
-        1: {"devices": [{"serial_number": "A", "os": "mac"},
-                        {"serial_number": "B", "os": "ios", "device_model": "iPhone 16"}]},
-        2: {"devices": [{"serial_number": "C", "os": "mac"}]},
-        3: {"devices": []},
+def test_devices_iterates_os_and_merges():
+    # The list requires `os`; devices() iterates ios/mac/tvos/visionos.
+    per_os = {
+        "ios": [{"serial_number": "P1", "os": "ios", "device_model": "iPhone16,1"}],
+        "mac": [{"serial_number": "M1", "os": "mac", "device_model": "Mac15,12"}],
     }
-    seen_pages = []
+    seen_os = []
 
     def handler(request):
-        page = json.loads(request.content)["options"]["page"]
-        seen_pages.append(page)
-        return httpx.Response(200, json=pages.get(page, {"devices": []}))
+        os_value = json.loads(request.content)["options"]["os"]
+        seen_os.append(os_value)
+        rows = per_os.get(os_value)
+        return httpx.Response(200, json=devices_envelope(rows) if rows else not_found_envelope())
 
     client = MosyleClient(mosyle_org(), transport=httpx.MockTransport(handler))
-    assert [d["id"] for d in client.devices()] == ["A", "B", "C"]
-    assert seen_pages == [1, 2, 3]
+    assert sorted(d["id"] for d in client.devices()) == ["M1", "P1"]
+    assert seen_os == ["ios", "mac", "tvos", "visionos"]  # all platforms queried
 
 
-def test_devices_stops_when_pages_repeat():
-    # If Mosyle ignores `page` and returns the whole fleet every time, the
-    # no-new-serials guard must stop us rather than loop forever.
+def test_devices_paginates_within_an_os(monkeypatch):
+    monkeypatch.setattr("abapit.mosyle.PAGE_SIZE", 2)
+    pages = {1: [{"serial_number": "A", "os": "mac"}, {"serial_number": "B", "os": "mac"}],
+             2: [{"serial_number": "C", "os": "mac"}]}
+
     def handler(request):
-        return httpx.Response(200, json={"devices": [{"serial_number": "A", "os": "mac"}]})
+        opts = json.loads(request.content)["options"]
+        if opts["os"] != "mac":
+            return httpx.Response(200, json=not_found_envelope())
+        return httpx.Response(200, json=devices_envelope(pages.get(opts["page"], [])))
 
     client = MosyleClient(mosyle_org(), transport=httpx.MockTransport(handler))
+    assert sorted(d["id"] for d in client.devices()) == ["A", "B", "C"]
+
+
+def test_devices_stops_when_pages_repeat(monkeypatch):
+    # If Mosyle ignores `page` and re-returns a full page, the no-new guard
+    # must stop us rather than loop to max_pages.
+    monkeypatch.setattr("abapit.mosyle.PAGE_SIZE", 1)
+
+    def handler(request):
+        if json.loads(request.content)["options"]["os"] != "mac":
+            return httpx.Response(200, json=not_found_envelope())
+        return httpx.Response(200, json=devices_envelope([{"serial_number": "A", "os": "mac"}]))
+
+    client = MosyleClient(mosyle_org(), max_pages=50, transport=httpx.MockTransport(handler))
     assert [d["id"] for d in client.devices()] == ["A"]
 
 
-def test_rows_tolerates_alternate_envelopes():
-    assert MosyleClient._rows({"response": [{"serial_number": "X"}]})[0]["serial_number"] == "X"
-    assert MosyleClient._rows({"data": {"devices": [{"serial_number": "Y"}]}})[0]["serial_number"] == "Y"
+def test_rows_parses_real_envelope_and_empties():
+    body = devices_envelope([{"serial_number": "X"}])
+    assert MosyleClient._rows(body)[0]["serial_number"] == "X"
+    assert MosyleClient._rows(not_found_envelope()) == []
+    assert MosyleClient._rows({"response": [{"status": "MISSING_DATA"}]}) == []
+    assert MosyleClient._rows({"devices": [{"serial_number": "Y"}]})[0]["serial_number"] == "Y"
     assert MosyleClient._rows({"nope": 1}) == []
 
 
-def test_token_header_is_sent():
+def test_access_token_header_is_sent():
     captured = {}
 
     def handler(request):
-        captured["token"] = request.headers.get("accesstoken")
-        return httpx.Response(200, json={"devices": []})
+        captured["token"] = request.headers.get("accessToken")
+        captured["auth"] = request.headers.get("Authorization")
+        return httpx.Response(200, json=not_found_envelope())
 
     client = MosyleClient(mosyle_org("secret-tok"), transport=httpx.MockTransport(handler))
     client.devices()
     assert captured["token"] == "secret-tok"
+    assert captured["auth"] is None  # token-only org: no Bearer without creds
+
+
+def test_login_obtains_and_sends_bearer():
+    logins = []
+    seen = []
+
+    def handler(request):
+        if request.url.path.endswith("/login"):
+            logins.append(json.loads(request.content))
+            return httpx.Response(200, headers={"Authorization": "Bearer JWT-XYZ"},
+                                  json={"UserID": "1", "email": "admin@acme.com"})
+        seen.append(request.headers.get("Authorization"))
+        return httpx.Response(200, json=not_found_envelope())
+
+    client = MosyleClient(mosyle_org("tok", "admin@acme.com", "pw"),
+                          transport=httpx.MockTransport(handler))
+    client.devices()
+    assert logins and logins[0] == {"email": "admin@acme.com", "password": "pw"}
+    assert seen and all(h == "Bearer JWT-XYZ" for h in seen)  # JWT cached + reused
+    assert len(logins) == 1                                   # logged in once
+
+
+def test_login_failure_surfaces_apierror():
+    client = MosyleClient(mosyle_org("tok", "admin@acme.com", "bad"),
+                          transport=httpx.MockTransport(
+                              lambda r: httpx.Response(401, json={"info": "invalid login"})))
+    with pytest.raises(ApiError) as exc:
+        client.ping()
+    assert exc.value.status == 401
 
 
 def test_device_lookup_filters_the_listing():
     def handler(request):
-        page = json.loads(request.content)["options"]["page"]
-        if page == 1:
-            return httpx.Response(200, json={"devices": [
-                {"serial_number": "A", "os": "mac"},
-                {"serial_number": "B", "os": "mac"}]})
-        return httpx.Response(200, json={"devices": []})
+        if json.loads(request.content)["options"]["os"] != "mac":
+            return httpx.Response(200, json=not_found_envelope())
+        return httpx.Response(200, json=devices_envelope([
+            {"serial_number": "A", "os": "mac"}, {"serial_number": "B", "os": "mac"}]))
 
     client = MosyleClient(mosyle_org(), transport=httpx.MockTransport(handler))
     assert client.device("B")["id"] == "B"
@@ -124,7 +186,7 @@ def test_device_lookup_filters_the_listing():
 
 def test_ping_raises_apierror_on_403():
     client = MosyleClient(mosyle_org(), transport=httpx.MockTransport(
-        lambda r: httpx.Response(403, json={"error": "forbidden"})))
+        lambda r: httpx.Response(403, json={"info": "forbidden"})))
     with pytest.raises(ApiError) as exc:
         client.ping()
     assert exc.value.status == 403
@@ -132,10 +194,10 @@ def test_ping_raises_apierror_on_403():
 
 def test_probe_capabilities_reads_ok_and_forbidden():
     ok = MosyleClient(mosyle_org(), transport=httpx.MockTransport(
-        lambda r: httpx.Response(200, json={"devices": []})))
+        lambda r: httpx.Response(200, json=not_found_envelope())))
     assert ok.probe_capabilities()[0]["status"] == "ok"
     bad = MosyleClient(mosyle_org(), transport=httpx.MockTransport(
-        lambda r: httpx.Response(401, json={"error": "bad token"})))
+        lambda r: httpx.Response(401, json={"info": "bad token"})))
     assert bad.probe_capabilities()[0]["status"] == "forbidden"
 
 
@@ -217,13 +279,11 @@ def test_web_renders_mosyle_through_templates(tmp_path, monkeypatch):
     config.set_active(slug)
 
     def handler(request):
-        page = json.loads(request.content)["options"]["page"]
-        if page == 1:
-            return httpx.Response(200, json={"devices": [{
-                "serial_number": "MOSY-1", "os": "mac",
-                "device_model": "MacBook Air", "status": "active",
-                "osversion": "15.5", "date_last_beat": 1718000000}]})
-        return httpx.Response(200, json={"devices": []})
+        if json.loads(request.content)["options"]["os"] != "mac":
+            return httpx.Response(200, json=not_found_envelope())
+        return httpx.Response(200, json=devices_envelope([{
+            "serial_number": "MOSY-1", "os": "mac", "device_model_name": "MacBook Air",
+            "status": "IN", "osversion": "15.5", "date_last_beat": 1718000000}]))
 
     monkeypatch.setattr(app_mod, "build_client",
                         lambda o: MosyleClient(o, transport=httpx.MockTransport(handler)))

@@ -1,24 +1,22 @@
 """HTTP client for the Mosyle Business API — read-only, for now.
 
-Where the Apple Business/School APIs are JSON:API (GET /v1/<resource>,
-items under `data`, cursor pagination), Mosyle's is operation-style: you
-POST to one endpoint per object (/v1/devices, /v1/users, ...) with a body
-``{"operation": "list", "options": {...}}`` and an ``accesstoken`` header
-carrying the API token from Mosyle's API Integration profile.
+Where the Apple Business/School APIs are JSON:API (GET /v1/<resource>, items
+under `data`, cursor pagination), Mosyle's is operation-style: you POST to one
+endpoint per object (/v1/devices, /v1/usergroups, ...) with a body
+``{"operation": "list", "options": {...}}``.
 
-This client adapts Mosyle's responses into the same
-``{"type", "id", "attributes"}`` shape the rest of abapit already speaks —
-templates, reports, CSV export, history — so the existing device pages
-render against Mosyle data unchanged. It deliberately mirrors the subset
-of ``client.ApiClient``'s public interface that the device-listing pages
-call; sections Mosyle doesn't cover are gated off in the navigation
-(see ``MOSYLE_SECTIONS`` in client.py), so they're never invoked.
+Auth (per Mosyle's docs; Basic auth is deprecated): POST the admin email +
+password to ``/login`` with the API access token in the ``accessToken`` header;
+the response carries a Bearer JWT in the ``Authorization`` header that lasts 24
+hours. Every other request sends BOTH ``accessToken`` and
+``Authorization: Bearer <jwt>``.
 
-NOTE: Mosyle's official API reference is gated behind a customer login.
-The base URL, the auth header, the ``list`` operation, and the response
-envelope below reflect the best public documentation and community tooling
-as of 2026-06. Confirm them against a live tenant with Settings → Test and
-adjust the constants here if a real response differs.
+The device list response is nested:
+``{"status":"OK","response":[{"devices":[...], "rows":N, "page":1, "page_size":50}]}``
+and the list REQUIRES an ``os`` (ios|mac|tvos|visionos), so we iterate the
+platforms and merge. Each device is adapted to the same
+``{"type","id","attributes"}`` shape the rest of abapit speaks, so the existing
+device pages, reports, and CSV export work unchanged.
 """
 
 from __future__ import annotations
@@ -35,12 +33,12 @@ from .config import Org
 log = logging.getLogger("abapit")
 
 MOSYLE_BUSINESS_BASE = "https://businessapi.mosyle.com/v1"
-# Header carrying the API access token. Mosyle also historically accepted an
-# admin Basic-auth pair; the token alone is the current documented path.
-TOKEN_HEADER = "accesstoken"
+TOKEN_HEADER = "accessToken"
+# The device list requires an `os`; iterate the platforms and merge.
+OS_VALUES = ("ios", "mac", "tvos", "visionos")
+PAGE_SIZE = 500
+JWT_TTL = 23 * 3600  # Mosyle Bearer tokens last 24h; refresh a little early.
 
-# Mosyle's `os` value (and device_model, as a tiebreaker) -> abapit's
-# canonical productFamily, so the existing family filter/charts work.
 _OS_FAMILY = {
     "mac": "Mac", "macos": "Mac", "osx": "Mac",
     "tvos": "AppleTV", "atv": "AppleTV",
@@ -52,35 +50,39 @@ _OS_FAMILY = {
 # names the templates/reports/quick-find already expect means no UI changes.
 _FIELD_MAP = {
     "serial_number": "serialNumber",
+    "deviceudid": "deviceUdid",
     "device_name": "deviceName",
-    "device_model": "deviceModel",
-    "model_name": "modelName",
+    "device_model": "deviceModelId",       # e.g. "iPad12,1"
+    "device_model_name": "deviceModel",     # e.g. "iPad (9th generation)"
+    "model_name": "modelName",              # e.g. "iPad"
     "osversion": "osVersion",
     "status": "status",
+    "enrollment_type": "enrollmentType",
+    "ManagementStatus": "managementStatus",
     "userid": "userId",
+    "useremail": "userEmail",
+    "username": "userName",
+    "CurrentConsoleManagedUser": "currentUser",
+    "currentconsolemanageduser": "currentUser",
     "battery": "batteryLevel",
-    "total_disk": "totalDiskBytes",
-    "available_disk": "availableDiskBytes",
+    "total_disk": "totalDiskGB",
+    "available_disk": "availableDiskGB",
     "is_supervised": "isSupervised",
     "lostmode_status": "lostModeStatus",
+    "asset_tag": "assetTag",
     "imei": "imei",
     "meid": "meid",
     "wifi_mac_address": "wifiMacAddress",
     "bluetooth_mac_address": "bluetoothMacAddress",
     "ethernet_mac_address": "ethernetMacAddress",
-    "enrollment_type": "enrollmentType",
-    "managementstatus": "managementStatus",
-    "username": "userName",
-    # Mosyle returns the signed-in user under a few casings depending on
-    # endpoint/platform; map them all to the canonical currentUser.
-    "CurrentConsoleManagedUser": "currentUser",
-    "currentconsolemanageduser": "currentUser",
 }
 
-# Epoch-seconds fields -> ISO 8601 (what abapit's date filters parse).
+# Epoch-seconds (or ISO) fields -> the camelCase names abapit reads.
 _DATE_MAP = {
     "date_last_beat": "lastCheckIn",
     "date_last_push": "lastPush",
+    "date_enroll": "enrolledAt",
+    "date_checkin": "lastMdmCheckIn",
     "date_app_info": "appInfoUpdated",
 }
 
@@ -88,11 +90,11 @@ _DATE_MAP = {
 def _to_iso(value) -> str | None:
     """Normalize a Mosyle timestamp to an ISO-8601-ish string.
 
-    Mosyle usually sends Unix epoch seconds, but some fields/tenants return a
-    date or datetime string already. Keep date-ish strings as-is (a leading
-    4-digit year with a dash — reports.parse_iso reads both date and datetime
-    forms); convert epoch ints/numeric strings; return None for anything else
-    so junk never reaches a date column or CSV cell.
+    Mosyle usually sends Unix epoch seconds (as strings), but some fields/
+    tenants return a date or datetime string already. Keep date-ish strings
+    (a leading 4-digit year with a dash — reports.parse_iso reads both date
+    and datetime forms); convert epochs; return None for anything else so
+    junk never reaches a date column or CSV cell.
     """
     if value is None or value == "":
         return None
@@ -109,7 +111,8 @@ def _family(raw: dict) -> str:
     os_value = str(raw.get("os") or "").lower()
     if os_value in _OS_FAMILY:
         return _OS_FAMILY[os_value]
-    model = str(raw.get("device_model") or raw.get("model_name") or "").lower()
+    model = str(raw.get("device_model") or raw.get("model_name")
+                or raw.get("device_model_name") or "").lower()
     device_type = str(raw.get("device_type") or "").lower()
     if "ipad" in model or "ipad" in device_type:
         return "iPad"
@@ -133,7 +136,7 @@ def adapt_device(raw: dict) -> dict:
             attrs[dst] = _to_iso(raw[src])
             consumed.add(src)
     if not attrs.get("deviceModel"):
-        attrs["deviceModel"] = raw.get("model_name", "")
+        attrs["deviceModel"] = raw.get("device_model") or raw.get("model_name", "")
     attrs["productFamily"] = _family(raw)
     attrs["managedBy"] = "Mosyle"
     consumed.update({"os", "device_type"})
@@ -158,7 +161,56 @@ class MosyleClient:
         self.base_url = (base_url or MOSYLE_BUSINESS_BASE).rstrip("/")
         self.max_pages = max_pages
         self._http = httpx.Client(timeout=60, transport=transport)
+        self._jwt: str | None = None
+        self._jwt_exp = 0.0
         self._devices_cache: list[dict] | None = None
+
+    # -- auth -------------------------------------------------------------
+
+    def _login(self) -> None:
+        """Exchange admin email/password (+ accessToken header) for a Bearer
+        JWT returned in the Authorization response header (valid ~24h)."""
+        if not self.org.mosyle_email or not self.org.mosyle_password:
+            return  # token-only mode (best effort; most tenants require login)
+        url = f"{self.base_url}/login"
+        try:
+            resp = self._http.post(
+                url, json={"email": self.org.mosyle_email,
+                           "password": self.org.mosyle_password},
+                headers={TOKEN_HEADER: self.org.mosyle_token,
+                         "Content-Type": "application/json"})
+        except httpx.HTTPError as exc:
+            raise ApiError(0, f"network error reaching Mosyle /login: {exc}") from exc
+        if resp.status_code != 200:
+            raise ApiError(resp.status_code,
+                           f"Mosyle /login failed: {_error_message(resp)}")
+        auth = resp.headers.get("Authorization", "")
+        token = auth[7:].strip() if auth[:7].lower() == "bearer " else auth.strip()
+        if not token:  # some stacks echo it in the body
+            try:
+                body = resp.json()
+                token = str(body.get("Authorization") or body.get("token") or "")
+                if token[:7].lower() == "bearer ":
+                    token = token[7:].strip()
+            except Exception:
+                token = ""
+        if not token:
+            raise ApiError(resp.status_code,
+                           "Mosyle /login did not return a Bearer token — check "
+                           "the email, password, and access token.")
+        self._jwt = token
+        self._jwt_exp = time.time() + JWT_TTL
+        log.info("Mosyle: obtained Bearer token for %s", self.org.name)
+
+    def _auth_headers(self) -> dict:
+        headers = {TOKEN_HEADER: self.org.mosyle_token,
+                   "Content-Type": "application/json"}
+        if self.org.mosyle_email and self.org.mosyle_password:
+            if not self._jwt or self._jwt_exp - 60 < time.time():
+                self._login()
+            if self._jwt:
+                headers["Authorization"] = f"Bearer {self._jwt}"
+        return headers
 
     # -- plumbing ---------------------------------------------------------
 
@@ -167,84 +219,93 @@ class MosyleClient:
         if options:
             body["options"] = options
         url = f"{self.base_url}/{path}"
-        headers = {TOKEN_HEADER: self.org.mosyle_token}
         started = time.perf_counter()
+        relogged = False
         for attempt in range(5):
+            headers = self._auth_headers()  # logs in / refreshes the JWT as needed
             try:
                 resp = self._http.post(url, json=body, headers=headers)
             except httpx.HTTPError as exc:
-                # All our operations are reads ("list"), so retrying is safe.
-                if attempt < 4:
+                if attempt < 4:  # list operations are reads — safe to retry
                     log.warning("network error on POST %s (attempt %d): %s — retrying",
                                 url, attempt + 1, exc)
                     time.sleep(0.5 * (attempt + 1))
                     continue
                 raise ApiError(0, f"network error: {exc}") from exc
+            if resp.status_code in (401, 403) and not relogged and self.org.mosyle_email:
+                log.info("%d from Mosyle %s — refreshing Bearer token",
+                         resp.status_code, url)
+                self._jwt = None
+                relogged = True
+                continue
             if resp.status_code == 429 and attempt < 4:
                 try:
                     delay = float(resp.headers.get("Retry-After", ""))
                 except ValueError:
                     delay = 2.0 ** attempt
-                log.warning("429 from Mosyle on %s — backing off %.0fs (attempt %d/5)",
-                            url, min(delay, 60), attempt + 1)
+                log.warning("429 from Mosyle on %s — backing off %.0fs", url, min(delay, 60))
                 time.sleep(min(delay, 60))
                 continue
             break
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        log.info("POST %s [%s] -> %d (%.0f ms)", url, operation,
-                 resp.status_code, elapsed_ms)
+        log.info("POST %s [%s] -> %d (%.0f ms)", url, operation, resp.status_code,
+                 (time.perf_counter() - started) * 1000)
         if resp.status_code >= 400:
             raise ApiError(resp.status_code, _error_message(resp))
         return resp.json()
 
     @staticmethod
     def _rows(body: dict) -> list[dict]:
-        """Pull the device list out of a Mosyle list response, tolerating the
-        couple of envelope shapes seen in the wild."""
+        """Devices from a list response. Real shape is
+        {"status":"OK","response":[{"devices":[...], "rows":N, ...}]}; error or
+        empty entries (DEVICES_NOTFOUND, MISSING_DATA) carry no "devices" key
+        and yield []."""
         if not isinstance(body, dict):
             return []
-        for key in ("devices", "response", "data", "rows"):
-            value = body.get(key)
-            if isinstance(value, list):
-                return value
-            if isinstance(value, dict) and isinstance(value.get("devices"), list):
-                return value["devices"]
+        resp = body.get("response")
+        if isinstance(resp, list):
+            for entry in resp:
+                if isinstance(entry, dict) and isinstance(entry.get("devices"), list):
+                    return entry["devices"]
+            return []
+        if isinstance(resp, dict) and isinstance(resp.get("devices"), list):
+            return resp["devices"]
+        if isinstance(body.get("devices"), list):  # tolerate a flatter shape
+            return body["devices"]
         return []
 
     # -- devices ----------------------------------------------------------
 
-    PAGE_SIZE = 1000
-
     def devices(self) -> list[dict]:
-        """Every device, adapted to JSON:API shape. Requests a large page_size
-        and pages by incrementing `page`, stopping when a page surfaces no new
-        serials — so it terminates whether Mosyle paginates by `page` or
-        returns the whole fleet at once.
-
-        Caveat (see module docstring): if a tenant ignores `page` and uses
-        offset/cursor paging instead, this fetches only the first page. The
-        per-page count is logged so that's noticeable; confirm against a real
-        tenant with a >page_size fleet and adjust if a response differs.
-        """
+        """Every device across all platforms, adapted to JSON:API shape. The
+        list requires an `os`, so iterate ios/mac/tvos/visionos and page each
+        (stop when a page is short); dedupe by serial as a safety net."""
         items: list[dict] = []
         seen: set[str] = set()
-        page = 1
-        while page <= self.max_pages:
-            body = self._post("devices", "list",
-                              {"page": page, "page_size": self.PAGE_SIZE})
-            rows = self._rows(body)
-            fresh = [r for r in rows
-                     if (r.get("serial_number") or r.get("deviceudid")) not in seen]
-            log.info("Mosyle devices page %d: %d rows, %d new", page, len(rows), len(fresh))
-            if not fresh:
-                break
-            for row in fresh:
-                seen.add(row.get("serial_number") or row.get("deviceudid"))
-                items.append(adapt_device(row))
-            page += 1
-        else:
-            log.warning("Mosyle device list hit max_pages=%d (%d devices) — "
-                        "raise max_pages", self.max_pages, len(items))
+        for os_value in OS_VALUES:
+            page = 1
+            while page <= self.max_pages:
+                body = self._post("devices", "list",
+                                  {"os": os_value, "page": page, "page_size": PAGE_SIZE})
+                rows = self._rows(body)
+                added = 0
+                for raw in rows:
+                    key = raw.get("serial_number") or raw.get("deviceudid")
+                    if key and key in seen:
+                        continue
+                    if key:
+                        seen.add(key)
+                    items.append(adapt_device(raw))
+                    added += 1
+                log.info("Mosyle %s page %d: %d rows, %d new", os_value, page,
+                         len(rows), added)
+                # Stop on a short page, or when a page adds nothing new (guards
+                # against a tenant that ignores `page` and re-returns the set).
+                if len(rows) < PAGE_SIZE or added == 0:
+                    break
+                page += 1
+            else:
+                log.warning("Mosyle %s list hit max_pages=%d — raise max_pages",
+                            os_value, self.max_pages)
         self._devices_cache = items
         return items
 
@@ -261,9 +322,9 @@ class MosyleClient:
     def device_assigned_server(self, device_id: str) -> dict | None:
         return None
 
-    # -- MDM servers: Mosyle *is* the MDM, so there are no ABM-style servers.
-    # The dashboard and device-detail pages call these unconditionally; empty
-    # values keep them working (the dashboard's MDM panel is gated off).
+    # Mosyle *is* the MDM, so there are no ABM-style servers. The dashboard and
+    # device-detail pages call these unconditionally; empty values keep them
+    # working (the dashboard's MDM panel is gated off for Mosyle).
     def mdm_servers(self) -> list[dict]:
         return []
 
@@ -273,12 +334,12 @@ class MosyleClient:
     # -- health / capabilities -------------------------------------------
 
     def ping(self) -> None:
-        """Cheap auth/connectivity check for Settings → Test."""
-        self._post("devices", "list", {"page": 1})
+        """Auth + connectivity check for Settings → Test: forces a login (if
+        credentials are set) and one tiny list call. Auth failures surface as
+        an ApiError; a tenant with no Macs just returns no rows."""
+        self._post("devices", "list", {"os": "mac", "page": 1, "page_size": 1})
 
     def probe_capabilities(self) -> list[dict]:
-        """Mosyle has no permissions endpoint either; the signal is whether a
-        list call succeeds with this token."""
         try:
             self.ping()
             status = "ok"
@@ -294,9 +355,15 @@ class MosyleClient:
 def _error_message(resp: httpx.Response) -> str:
     try:
         body = resp.json()
-        for key in ("error", "errorMessage", "message"):
+        for key in ("error", "errorMessage", "message", "info"):
             if body.get(key):
                 return f"Mosyle: {body[key]}"
+        # operation-level error nested in response[]
+        resp_list = body.get("response")
+        if isinstance(resp_list, list) and resp_list:
+            entry = resp_list[0]
+            if isinstance(entry, dict) and entry.get("info"):
+                return f"Mosyle: {entry.get('status', '')} {entry['info']}".strip()
     except Exception:
         pass
     return f"HTTP {resp.status_code}: {resp.text[:300]}"

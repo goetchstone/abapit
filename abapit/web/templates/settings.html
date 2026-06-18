@@ -81,15 +81,18 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
 
   <section class="panel wide">
     <h2>Add a Mosyle organization</h2>
-    <p class="muted">In Mosyle Business: <strong>API Integration</strong> →
-    enable a profile and copy its access token. abapit reads device inventory
-    (live status, last check-in, OS, storage, assigned user) — no private key
-    needed.</p>
+    <p class="muted">In Mosyle Business: <strong>Organization → API Integration</strong>
+    → enable the profile and copy its access token. Mosyle's JWT auth also needs
+    an admin email + password (exchanged at <code>/login</code> for a 24-hour
+    token; Basic auth is deprecated). abapit reads device inventory only —
+    no private key needed.</p>
     <form method="post" action="/settings/orgs/mosyle" class="form-grid">
       <label>Display name <input name="name" required placeholder="Acme (Mosyle)"></label>
       <label class="full">API access token
-        <input name="token" required placeholder="paste the token from Mosyle's API Integration profile">
+        <input name="token" required placeholder="access token from Organization → API Integration">
       </label>
+      <label>Admin email <input name="email" type="email" required placeholder="admin@acme.com"></label>
+      <label>Admin password <input name="password" type="password" required placeholder="••••••••"></label>
       <div class="full"><button class="btn primary">Add Mosyle org</button></div>
     </form>
   </section>
