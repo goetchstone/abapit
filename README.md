@@ -50,6 +50,29 @@ it to your Dock. For a standalone window with its own icon, open
 After pulling new code, run `abapit restart-app` so the service loads it.
 `abapit uninstall-app` removes both.
 
+`install-app` reuses whatever Python you ran it with (it works against the
+3.9 that ships with macOS Command Line Tools — abapit supports 3.9+).
+
+### Self-contained app (bundled Python)
+
+To get an `abapit.app` that depends on **no** system Python — so it runs on a
+clean Mac, and isn't tied to Apple's aging 3.9 — build a bundle with its own
+CPython:
+
+```sh
+scripts/build_app.sh                 # -> ~/Applications/abapit.app + login service
+APP_DEST=./dist scripts/build_app.sh # -> ./dist/abapit.app, no login service
+```
+
+It pulls a relocatable CPython from
+[python-build-standalone](https://github.com/astral-sh/python-build-standalone),
+installs abapit + deps into it, assembles the `.app`, and points the login
+service at the bundled interpreter (~110 MB, all in
+`Contents/Resources/python`). Run it once per architecture you ship
+(`arm64`, `x86_64`). The bundle is **not** code-signed — fine for the machine
+that built it, but to distribute it to other Macs, codesign it with a
+Developer ID and notarize it, or Gatekeeper will block it.
+
 ## Logging
 
 Every Apple API call is logged with status and latency, along with token
