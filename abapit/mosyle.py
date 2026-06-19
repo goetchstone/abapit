@@ -149,6 +149,39 @@ def adapt_device(raw: dict) -> dict:
     return {"type": "orgDevices", "id": device_id, "attributes": attrs}
 
 
+def adapt_user(raw: dict) -> dict:
+    """One Mosyle user -> JSON:API item (id = Mosyle user id / identifier)."""
+    attrs = {
+        "name": raw.get("name", ""),
+        "email": raw.get("email") or raw.get("managedappleid", ""),
+        "identifier": raw.get("identifier", ""),
+        "userType": raw.get("type") or raw.get("usertype", ""),
+    }
+    for key, value in raw.items():
+        attrs.setdefault(key, value)
+    user_id = str(raw.get("iduser") or raw.get("id") or raw.get("identifier") or "")
+    return {"type": "mosyleUsers", "id": user_id, "attributes": attrs}
+
+
+def adapt_group(raw: dict, kind: str) -> dict:
+    """One Mosyle user/device group -> JSON:API item."""
+    members = raw.get("device_numbers")
+    if members is None:
+        primary = raw.get("idusers_primary")
+        members = len(primary) if isinstance(primary, list) else raw.get("members")
+    attrs = {
+        "name": raw.get("name", ""),
+        "identifier": raw.get("identifier", ""),
+        "memberCount": members,
+        "os": raw.get("os", ""),
+    }
+    for key, value in raw.items():
+        attrs.setdefault(key, value)
+    group_id = str(raw.get("idusergroup") or raw.get("iddevicegroup")
+                   or raw.get("id") or "")
+    return {"type": kind, "id": group_id, "attributes": attrs}
+
+
 class MosyleClient:
     """Synchronous, read-only client bound to one Mosyle Business org."""
 
@@ -313,6 +346,48 @@ class MosyleClient:
         if self._devices_cache is None:
             self.devices()
         return next((d for d in (self._devices_cache or []) if d["id"] == device_id), {})
+
+    # -- people & groups (read-only inventory) ----------------------------
+
+    @staticmethod
+    def _extract(body: dict, keys: tuple) -> list[dict]:
+        """Pull a named list (users/usergroups/devicegroups) out of the
+        response[] envelope, tolerating a dict-or-list `response`."""
+        resp = body.get("response") if isinstance(body, dict) else None
+        entries = resp if isinstance(resp, list) else ([resp] if isinstance(resp, dict) else [])
+        for entry in entries:
+            if isinstance(entry, dict):
+                for key in keys:
+                    if isinstance(entry.get(key), list):
+                        return entry[key]
+        return []
+
+    def _list_objects(self, path: str, operation: str, keys: tuple,
+                      options: dict | None = None) -> list[dict]:
+        items: list[dict] = []
+        page = 1
+        while page <= self.max_pages:
+            opts = dict(options or {})
+            opts.update({"page": page, "page_size": PAGE_SIZE})
+            rows = self._extract(self._post(path, operation, opts), keys)
+            items.extend(rows)
+            if len(rows) < PAGE_SIZE:
+                break
+            page += 1
+        return items
+
+    def users(self) -> list[dict]:
+        return [adapt_user(u) for u in
+                self._list_objects("users", "list_users", ("users",))]
+
+    def user_groups(self) -> list[dict]:
+        return [adapt_group(g, "userGroups") for g in
+                self._list_objects("usergroups", "list_usergroup", ("usergroups", "groups"))]
+
+    def device_groups(self) -> list[dict]:
+        return [adapt_group(g, "deviceGroups") for g in
+                self._list_objects("devicegroups", "list_devicegroup",
+                                   ("devicegroups", "groups", "device_groups"))]
 
     # AppleCare/warranty and ABM assignment have no Mosyle equivalent; return
     # empty so the (gated) device-detail template renders without crashing.

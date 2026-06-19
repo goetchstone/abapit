@@ -172,6 +172,32 @@ def test_login_failure_surfaces_apierror():
     assert exc.value.status == 401
 
 
+def test_users_and_groups_parse_envelope_and_adapt():
+    def handler(request):
+        op = json.loads(request.content)["operation"]
+        if op == "list_users":
+            return httpx.Response(200, json={"status": "OK", "response": [{"users": [
+                {"iduser": "10", "name": "Sarah", "email": "sarah@acme.com", "type": "ENDUSER"}]}]})
+        if op == "list_usergroup":
+            return httpx.Response(200, json={"status": "OK", "response": [{"usergroups": [
+                {"idusergroup": "1000", "name": "Sales", "idusers_primary": [1, 2]}]}]})
+        if op == "list_devicegroup":
+            return httpx.Response(200, json={"status": "OK", "response": [{"devicegroups": [
+                {"id": "3510", "name": "Front Desk", "device_numbers": 7, "os": "ios"}]}]})
+        return httpx.Response(200, json=not_found_envelope())
+
+    client = MosyleClient(mosyle_org(), transport=httpx.MockTransport(handler))
+    user = client.users()[0]
+    assert user["type"] == "mosyleUsers" and user["id"] == "10"
+    assert user["attributes"]["name"] == "Sarah" and user["attributes"]["userType"] == "ENDUSER"
+    ug = client.user_groups()[0]
+    assert ug["type"] == "userGroups" and ug["id"] == "1000"
+    assert ug["attributes"]["memberCount"] == 2          # idusers_primary length
+    dg = client.device_groups()[0]
+    assert dg["type"] == "deviceGroups" and dg["id"] == "3510"
+    assert dg["attributes"]["memberCount"] == 7 and dg["attributes"]["name"] == "Front Desk"
+
+
 def test_device_lookup_filters_the_listing():
     def handler(request):
         if json.loads(request.content)["options"]["os"] != "mac":
@@ -213,7 +239,10 @@ def test_sections_for_provider():
     assert "devices" in mosyle_sections
     assert "mosyle_os_breakdown" in mosyle_sections
     assert "mosyle_stale" in mosyle_sections
-    assert "users" not in mosyle_sections          # Apple-only inventory
+    assert "users" in mosyle_sections               # Mosyle inventory (Phase 2)
+    assert "device_groups" in mosyle_sections
+    assert "assign" not in mosyle_sections          # ABM-only write
+    assert "apps" not in mosyle_sections            # ABM-only content
     assert "reconciliation" not in mosyle_sections  # cross-org, gated in render()
     assert "users" in sections_for("business", "apple")
     assert "users" not in sections_for("school", "apple")
@@ -293,9 +322,11 @@ def test_web_renders_mosyle_through_templates(tmp_path, monkeypatch):
     devices = client.get("/devices")
     assert devices.status_code == 200
     assert b"MOSY-1" in devices.content and b"MacBook Air" in devices.content
-    # Nav is gated to Mosyle's sections: no People/Content/Assign.
-    assert b'href="/users"' not in devices.content
+    # Nav is gated to Mosyle's sections: no ABM-only write/content sections,
+    # but Mosyle inventory (device groups) is present.
     assert b'href="/assign"' not in devices.content
+    assert b'href="/apps"' not in devices.content
+    assert b'href="/device-groups"' in devices.content
 
     home = client.get("/")
     assert home.status_code == 200
@@ -417,9 +448,43 @@ def test_mosyle_posture_pages_render_for_mosyle_org(tmp_path, monkeypatch, ec_ke
 
 def test_mosyle_posture_gated_off_apple_org(tmp_path, monkeypatch, ec_key_pair):
     client, _abm, _mosyle = _two_org_client(tmp_path, monkeypatch, ec_key_pair)
-    # Apple org is active → posture sections are not available.
+    # Apple org is active → Mosyle-only sections are not available.
     assert b"not available" in client.get("/reports/mosyle-os-breakdown").content
     assert b"not available" in client.get("/reports/mosyle-stale").content
+    assert b"not available" in client.get("/device-groups").content
+
+
+def test_web_renders_mosyle_people_and_groups(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import abapit.web.app as app_mod
+
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("ABAPIT_DATA_DIR", str(tmp_path / "data"))
+    slug = config.add_org(name="Acme Mosyle", provider="mosyle", mosyle_token="tok")
+    config.set_active(slug)
+
+    def handler(request):
+        op = json.loads(request.content)["operation"]
+        if op == "list_users":
+            return httpx.Response(200, json={"status": "OK", "response": [{"users": [
+                {"iduser": "10", "name": "Sarah Chen", "email": "sarah@acme.com"}]}]})
+        if op == "list_usergroup":
+            return httpx.Response(200, json={"status": "OK", "response": [{"usergroups": [
+                {"idusergroup": "1000", "name": "Sales"}]}]})
+        if op == "list_devicegroup":
+            return httpx.Response(200, json={"status": "OK", "response": [{"devicegroups": [
+                {"id": "3510", "name": "Front Desk", "device_numbers": 7}]}]})
+        return httpx.Response(200, json=not_found_envelope())
+
+    monkeypatch.setattr(app_mod, "build_client",
+                        lambda o: MosyleClient(o, transport=httpx.MockTransport(handler)))
+    client = TestClient(app_mod.create_app(), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    assert b"Sarah Chen" in client.get("/users").content
+    assert b"Sales" in client.get("/user-groups").content
+    assert b"Front Desk" in client.get("/device-groups").content
+    assert b"/device-groups" in client.get("/").content   # nav entry for Mosyle orgs
 
 
 def test_device_360_merges_both_providers(tmp_path, monkeypatch, ec_key_pair):

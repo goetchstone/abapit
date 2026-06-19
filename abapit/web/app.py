@@ -44,6 +44,7 @@ NAV = [
         ("devices", "/devices", "Devices"),
         ("mdm_servers", "/mdm-servers", "MDM Servers"),
         ("mdm_enrolled", "/mdm-enrolled", "Apple MDM Enrolled"),
+        ("device_groups", "/device-groups", "Device Groups"),
         ("assign", "/assign", "Assign to MDM"),
     ]),
     ("People", [
@@ -99,6 +100,7 @@ RESOURCES = {
     "mdm-enrolled": ("mdm_enrolled_devices", "Apple MDM Enrolled Devices"),
     "users": ("users", "Users"),
     "user-groups": ("user_groups", "User Groups"),
+    "device-groups": ("device_groups", "Device Groups"),
     "apps": ("apps", "Apps"),
     "packages": ("packages", "Packages"),
     "blueprints": ("blueprints", "Blueprints"),
@@ -560,6 +562,12 @@ def create_app(demo: bool = False,
         guard("users")
         users = cached("users", lambda c: c.users())
         rows = [u for u in users if not q or matches(u, q)]
+        # Mosyle users have a different shape than ABM's — render generically
+        # rather than through ABM-specific columns.
+        if client().org.provider == "mosyle":
+            header, table = items_to_rows(rows[:MAX_TABLE_ROWS])
+            return render(request, "generic_table.html", active="users",
+                          title="Users", header=header, rows=table, export="users")
         return render(request, "users.html", active="users",
                       users=rows[:MAX_TABLE_ROWS], q=q, total=len(users))
 
@@ -567,7 +575,21 @@ def create_app(demo: bool = False,
     def groups_page(request: Request):
         guard("user_groups")
         groups = cached("user_groups", lambda c: c.user_groups())
+        if client().org.provider == "mosyle":
+            header, table = items_to_rows(groups)
+            return render(request, "generic_table.html", active="user_groups",
+                          title="User Groups", header=header, rows=table,
+                          export="user-groups")
         return render(request, "user_groups.html", active="user_groups", groups=groups)
+
+    @app.get("/device-groups", response_class=HTMLResponse)
+    def device_groups_page(request: Request):
+        guard("device_groups")
+        groups = cached("device_groups", lambda c: c.device_groups())
+        header, table = items_to_rows(groups)
+        return render(request, "generic_table.html", active="device_groups",
+                      title="Device Groups", header=header, rows=table,
+                      export="device-groups")
 
     @app.get("/user-groups/{group_id}", response_class=HTMLResponse)
     def group_page(request: Request, group_id: str):

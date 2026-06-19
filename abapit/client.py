@@ -49,7 +49,8 @@ SCHOOL_SECTIONS = ("devices", "mdm_servers", "changes", "coverage",
 # (OS-version spread, stale check-ins) that ABM structurally can't provide.
 # The ABM<->Mosyle reconciliation report is cross-org, so it is gated in
 # render() by "both providers configured" rather than via this per-org list.
-MOSYLE_SECTIONS = ("devices", "mosyle_os_breakdown", "mosyle_stale")
+MOSYLE_SECTIONS = ("devices", "users", "user_groups", "device_groups",
+                   "mosyle_os_breakdown", "mosyle_stale")
 
 
 def sections_for(scope: str, provider: str = "apple") -> tuple[str, ...]:

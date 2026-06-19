@@ -30,6 +30,7 @@ EXPORT_RESOURCES = {
     "mdm-enrolled": "mdm_enrolled_devices",
     "users": "users",
     "user-groups": "user_groups",
+    "device-groups": "device_groups",
     "apps": "apps",
     "packages": "packages",
     "blueprints": "blueprints",
