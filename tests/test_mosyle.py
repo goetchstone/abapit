@@ -182,8 +182,11 @@ def test_users_and_groups_parse_envelope_and_adapt():
             return httpx.Response(200, json={"status": "OK", "response": [{"usergroups": [
                 {"idusergroup": "1000", "name": "Sales", "idusers_primary": [1, 2]}]}]})
         if op == "list_devicegroup":
-            return httpx.Response(200, json={"status": "OK", "response": [{"devicegroups": [
-                {"id": "3510", "name": "Front Desk", "device_numbers": 7, "os": "ios"}]}]})
+            # device groups require an os (real shape: response is a dict)
+            if json.loads(request.content)["options"].get("os") != "ios":
+                return httpx.Response(200, json=not_found_envelope())
+            return httpx.Response(200, json={"status": "OK", "response": {"devicegroups": [
+                {"id": "3510", "name": "Front Desk", "device_numbers": 7, "os": "ios"}]}})
         return httpx.Response(200, json=not_found_envelope())
 
     client = MosyleClient(mosyle_org(), transport=httpx.MockTransport(handler))
@@ -229,6 +232,19 @@ def test_normalize_logs_flattens_all_types():
     whens = [e["when"] for e in events if e["when"]]
     assert whens == sorted(whens, reverse=True)        # newest first
     assert normalize_logs({}) == []
+
+
+def test_append_mosyle_logs_accumulates_and_dedups(tmp_path, monkeypatch):
+    monkeypatch.setenv("ABAPIT_DATA_DIR", str(tmp_path))
+    from abapit import history
+    e1 = [{"kind": "action", "when": "2025-06-01T10:00:00Z", "label": "A", "user": "jane"}]
+    e2 = [{"kind": "action", "when": "2025-06-01T11:00:00Z", "label": "B", "user": "joe"}]
+    history.append_mosyle_logs("mosyle.x", e1)
+    history.append_mosyle_logs("mosyle.x", e2)
+    history.append_mosyle_logs("mosyle.x", e1)   # duplicate drain
+    history.append_mosyle_logs("mosyle.x", [])   # empty drain must keep history
+    stored = history.load_mosyle_logs("mosyle.x")
+    assert [s["label"] for s in stored] == ["B", "A"]  # newest first, deduped, retained
 
 
 def test_logs_returns_empty_without_token():

@@ -595,10 +595,16 @@ def create_app(demo: bool = False,
     @app.get("/mosyle-activity", response_class=HTMLResponse)
     def mosyle_activity_page(request: Request, type: str = ""):
         guard("mosyle_logs")
-        if not client().org.mosyle_logs_token:
+        c = client()
+        if not c.org.mosyle_logs_token:
             return render(request, "mosyle_logs.html", active="mosyle_logs",
                           events=None, counts={}, non_compliant=0, type=type)
-        all_events = cached("mosyle_logs", lambda c: c.logs())
+        # Logs Stream drains on read — drain (cache-throttled) and append to the
+        # per-org store, then display the accumulated history.
+        def _drain_and_store(cc):
+            return history.append_mosyle_logs(cc.org.client_id, cc.logs())
+        cached("mosyle_logs", _drain_and_store)
+        all_events = history.load_mosyle_logs(c.org.client_id)
         counts: dict = {}
         for event in all_events:
             counts[event["kind"]] = counts.get(event["kind"], 0) + 1

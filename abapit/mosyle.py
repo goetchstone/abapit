@@ -445,9 +445,15 @@ class MosyleClient:
                 self._list_objects("usergroups", "list_usergroup", ("usergroups", "groups"))]
 
     def device_groups(self) -> list[dict]:
-        return [adapt_group(g, "deviceGroups") for g in
-                self._list_objects("devicegroups", "list_devicegroup",
-                                   ("devicegroups", "groups", "device_groups"))]
+        # list_devicegroup requires an os (like the device list); groups are
+        # per-platform, so iterate and concatenate.
+        groups: list[dict] = []
+        for os_value in ("ios", "mac", "tvos"):
+            rows = self._list_objects("devicegroups", "list_devicegroup",
+                                      ("devicegroups", "groups", "device_groups"),
+                                      options={"os": os_value})
+            groups.extend(adapt_group(g, "deviceGroups") for g in rows)
+        return groups
 
     # -- logs stream (separate host + token; the device "status channel") --
 

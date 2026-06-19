@@ -295,3 +295,41 @@ def item_label(attributes: dict) -> str:
         if value:
             return str(value)
     return ""
+
+
+# -- Mosyle Logs Stream accumulation ---------------------------------------
+# The Logs Stream is a CONSUMING queue: each read drains it. So we drain and
+# append to a per-org JSON store, deduped, and serve the accumulated history.
+
+def _mosyle_logs_path(client_id: str) -> Path:
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in client_id)
+    return data_dir() / "mosyle_logs" / f"{safe}.json"
+
+
+def _log_key(event: dict) -> str:
+    return "|".join(str(event.get(k, "")) for k in
+                    ("kind", "when", "label", "device", "user"))
+
+
+def load_mosyle_logs(client_id: str, limit: int = 2000) -> list:
+    try:
+        data = json.loads(_mosyle_logs_path(client_id).read_text())
+    except (OSError, ValueError):
+        return []
+    return data[:limit] if isinstance(data, list) else []
+
+
+def append_mosyle_logs(client_id: str, events: list, cap: int = 2000) -> list:
+    """Merge freshly-drained events into the per-org store (dedup, newest
+    first, capped) and return the accumulated list."""
+    existing = load_mosyle_logs(client_id, limit=cap)
+    if not events:
+        return existing
+    seen = {_log_key(e) for e in existing}
+    merged = existing + [e for e in events if _log_key(e) not in seen]
+    merged.sort(key=lambda e: e.get("when", ""), reverse=True)
+    merged = merged[:cap]
+    path = _mosyle_logs_path(client_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(merged))
+    return merged
