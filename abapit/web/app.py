@@ -59,6 +59,7 @@ NAV = [
     ]),
     ("Activity", [
         ("audit_events", "/audit-events", "Audit Events"),
+        ("mosyle_logs", "/mosyle-activity", "Activity & Compliance"),
         ("changes", "/changes", "Changes"),
     ]),
     ("Reports", [
@@ -591,6 +592,23 @@ def create_app(demo: bool = False,
                       title="Device Groups", header=header, rows=table,
                       export="device-groups")
 
+    @app.get("/mosyle-activity", response_class=HTMLResponse)
+    def mosyle_activity_page(request: Request, type: str = ""):
+        guard("mosyle_logs")
+        if not client().org.mosyle_logs_token:
+            return render(request, "mosyle_logs.html", active="mosyle_logs",
+                          events=None, counts={}, non_compliant=0, type=type)
+        all_events = cached("mosyle_logs", lambda c: c.logs())
+        counts: dict = {}
+        for event in all_events:
+            counts[event["kind"]] = counts.get(event["kind"], 0) + 1
+        non_compliant = sum(1 for e in all_events if e["kind"] == "compliance"
+                            and "lost" in e["status"].lower())
+        events = [e for e in all_events if not type or e["kind"] == type]
+        return render(request, "mosyle_logs.html", active="mosyle_logs",
+                      events=events[:MAX_TABLE_ROWS], counts=counts,
+                      non_compliant=non_compliant, type=type, total=len(events))
+
     @app.get("/user-groups/{group_id}", response_class=HTMLResponse)
     def group_page(request: Request, group_id: str):
         guard("user_groups")
@@ -991,10 +1009,12 @@ def create_app(demo: bool = False,
 
     @app.post("/settings/orgs/mosyle")
     def settings_add_mosyle(name: str = Form(...), token: str = Form(""),
-                            email: str = Form(""), password: str = Form("")):
+                            email: str = Form(""), password: str = Form(""),
+                            logs_token: str = Form("")):
         try:
             config.add_org(name=name, provider="mosyle", mosyle_token=token.strip(),
-                           mosyle_email=email.strip(), mosyle_password=password)
+                           mosyle_email=email.strip(), mosyle_password=password,
+                           mosyle_logs_token=logs_token.strip())
             msg = (f"Added Mosyle org {name!r}. Click Test to verify the "
                    "credentials, then Use to switch to it.")
         except ValueError as exc:

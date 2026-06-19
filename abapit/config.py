@@ -61,6 +61,9 @@ class Org:
     mosyle_token: str = ""
     mosyle_email: str = ""
     mosyle_password: str = ""
+    # Mosyle Logs Stream is a SEPARATE service (businessapilogs.mosyle.com) with
+    # its own access token, enabled under Organization > Integrations. Optional.
+    mosyle_logs_token: str = ""
 
     @property
     def issuer(self) -> str:
@@ -92,6 +95,7 @@ class Org:
             "mosyle_token": self.mosyle_token,
             "mosyle_email": self.mosyle_email,
             "mosyle_password": self.mosyle_password,
+            "mosyle_logs_token": self.mosyle_logs_token,
         }
 
 
@@ -218,10 +222,12 @@ def add_org(
     mosyle_token: str = "",
     mosyle_email: str = "",
     mosyle_password: str = "",
+    mosyle_logs_token: str = "",
 ) -> str:
     """Add an org profile and make it active if it is the first one."""
     if provider == "mosyle":
-        return _add_mosyle_org(name, mosyle_token, mosyle_email, mosyle_password, role)
+        return _add_mosyle_org(name, mosyle_token, mosyle_email, mosyle_password,
+                               role, mosyle_logs_token)
     if provider != "apple":
         raise ValueError(f"provider must be 'apple' or 'mosyle', got {provider!r}")
     if scope not in ("business", "school"):
@@ -260,7 +266,8 @@ def add_org(
 
 
 def _add_mosyle_org(name: str, mosyle_token: str, mosyle_email: str = "",
-                    mosyle_password: str = "", role: str = "") -> str:
+                    mosyle_password: str = "", role: str = "",
+                    mosyle_logs_token: str = "") -> str:
     """Add a Mosyle Business org. No private key — the API access token from
     Mosyle's API Integration profile, plus the admin email/password that
     /login exchanges for a Bearer token. The client_id is synthetic (it only
@@ -281,6 +288,7 @@ def _add_mosyle_org(name: str, mosyle_token: str, mosyle_email: str = "",
         mosyle_token=mosyle_token.strip(),
         mosyle_email=mosyle_email.strip(),
         mosyle_password=mosyle_password,
+        mosyle_logs_token=mosyle_logs_token.strip(),
         role=role.strip(),
     )
     if not cfg.active_org:

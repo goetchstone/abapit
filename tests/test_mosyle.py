@@ -198,6 +198,68 @@ def test_users_and_groups_parse_envelope_and_adapt():
     assert dg["attributes"]["memberCount"] == 7 and dg["attributes"]["name"] == "Front Desk"
 
 
+LOGS_RESPONSE = {
+    "av": {"Logs": [], "Page": 1, "TotalLogs": 0},
+    "zero_trust": {"Events": {"TotalLogs": 1, "Logs": [
+        {"Device": "MacBook Air", "Application": "com.google.Chrome",
+         "Action": "Trusted", "Source": "Manual", "Timestamp": "1710264696"}]}},
+    "dns": [],
+    "compliance": {"macOS": {"Logs": []}, "iOS": {"Logs": [
+        {"Status": "Lost Compliance", "RuleName": "Cookies allowed only from visited sites",
+         "Timestamp": "1710260000", "DeviceName": "iPad 100",
+         "SerialNumber": "123456CD78", "E-mail": "test@mail.com"}]}},
+    "action_logs": {"Logs": [
+        {"UserName": "Jane Smith", "Action": "Save Device Group",
+         "ActionDate": "1710267184", "IP": "::1", "E-mail": "jane@acme.com"}]},
+}
+
+
+def test_normalize_logs_flattens_all_types():
+    from abapit.mosyle import normalize_logs
+    events = normalize_logs(LOGS_RESPONSE)
+    kinds = [e["kind"] for e in events]
+    assert {"compliance", "zero_trust", "action"} <= set(kinds)
+    comp = next(e for e in events if e["kind"] == "compliance")
+    assert comp["status"] == "Lost Compliance" and comp["serial"] == "123456CD78"
+    assert comp["device"] == "iPad 100"
+    zt = next(e for e in events if e["kind"] == "zero_trust")
+    assert zt["status"] == "Trusted" and zt["device"] == "MacBook Air"
+    act = next(e for e in events if e["kind"] == "action")
+    assert act["user"] == "Jane Smith" and "Save Device Group" in act["label"]
+    whens = [e["when"] for e in events if e["when"]]
+    assert whens == sorted(whens, reverse=True)        # newest first
+    assert normalize_logs({}) == []
+
+
+def test_logs_returns_empty_without_token():
+    client = MosyleClient(mosyle_org("dtok"),
+                          transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+    assert client.logs() == []  # no logs token configured -> no call made
+
+
+def test_logs_logs_in_on_separate_host_with_logs_token():
+    seen = {}
+
+    def handler(request):
+        if request.url.path.endswith("/login"):
+            seen["login_host"] = request.url.host
+            seen["login_token"] = request.headers.get("accessToken")
+            return httpx.Response(200, headers={"Authorization": "Bearer LJWT"},
+                                  json={"UserID": "1"})
+        seen["logs_host"] = request.url.host
+        seen["bearer"] = request.headers.get("Authorization")
+        return httpx.Response(200, json={"status": "OK", "response": LOGS_RESPONSE})
+
+    org = mosyle_org("dtok", "admin@acme.com", "pw")
+    org.mosyle_logs_token = "ltok"
+    client = MosyleClient(org, transport=httpx.MockTransport(handler))
+    events = client.logs()
+    assert seen["login_host"] == "businessapilogs.mosyle.com"   # separate host
+    assert seen["login_token"] == "ltok"                        # the LOGS token, not the device token
+    assert seen["bearer"] == "Bearer LJWT"
+    assert any(e["kind"] == "compliance" for e in events)
+
+
 def test_device_lookup_filters_the_listing():
     def handler(request):
         if json.loads(request.content)["options"]["os"] != "mac":
@@ -504,6 +566,39 @@ def test_device_360_unknown_serial_is_404(tmp_path, monkeypatch, ec_key_pair):
     config.set_active(mosyle_slug)  # active Mosyle org returns None for unknown serials
     resp = client.get("/devices/NOPE-999")
     assert b"not found" in resp.content.lower()  # 404 page, not a blank misleading record
+
+
+def test_web_mosyle_activity_configured_and_not(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import abapit.web.app as app_mod
+
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("ABAPIT_DATA_DIR", str(tmp_path / "data"))
+
+    def handler(request):
+        if request.url.path.endswith("/login"):
+            return httpx.Response(200, headers={"Authorization": "Bearer LJWT"}, json={})
+        return httpx.Response(200, json={"status": "OK", "response": LOGS_RESPONSE})
+
+    monkeypatch.setattr(app_mod, "build_client",
+                        lambda o: MosyleClient(o, transport=httpx.MockTransport(handler)))
+    client = TestClient(app_mod.create_app(), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+
+    no_logs = config.add_org(name="Acme Mosyle", provider="mosyle", mosyle_token="tok",
+                             mosyle_email="a@acme.com", mosyle_password="pw")
+    config.set_active(no_logs)
+    resp = client.get("/mosyle-activity")
+    assert resp.status_code == 200 and b"isn't configured" in resp.content
+
+    with_logs = config.add_org(name="Acme Logs", provider="mosyle", mosyle_token="tok2",
+                               mosyle_email="a@acme.com", mosyle_password="pw",
+                               mosyle_logs_token="ltok")
+    config.set_active(with_logs)
+    resp = client.get("/mosyle-activity")
+    assert resp.status_code == 200
+    assert b"Lost Compliance" in resp.content and b"iPad 100" in resp.content
 
 
 def test_report_csv_exports(tmp_path, monkeypatch, ec_key_pair):

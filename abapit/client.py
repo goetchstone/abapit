@@ -50,7 +50,7 @@ SCHOOL_SECTIONS = ("devices", "mdm_servers", "changes", "coverage",
 # The ABM<->Mosyle reconciliation report is cross-org, so it is gated in
 # render() by "both providers configured" rather than via this per-org list.
 MOSYLE_SECTIONS = ("devices", "users", "user_groups", "device_groups",
-                   "mosyle_os_breakdown", "mosyle_stale")
+                   "mosyle_os_breakdown", "mosyle_stale", "mosyle_logs")
 
 
 def sections_for(scope: str, provider: str = "apple") -> tuple[str, ...]:

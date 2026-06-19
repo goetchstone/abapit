@@ -33,6 +33,8 @@ from .config import Org
 log = logging.getLogger("abapit")
 
 MOSYLE_BUSINESS_BASE = "https://businessapi.mosyle.com/v1"
+# Logs Stream is a separate service with its own access token + login.
+MOSYLE_LOGS_BASE = "https://businessapilogs.mosyle.com/v1"
 TOKEN_HEADER = "accessToken"
 # The device list requires an `os`; iterate the platforms and merge.
 OS_VALUES = ("ios", "mac", "tvos", "visionos")
@@ -182,6 +184,62 @@ def adapt_group(raw: dict, kind: str) -> dict:
     return {"type": kind, "id": group_id, "attributes": attrs}
 
 
+def normalize_logs(response: dict) -> list[dict]:
+    """Flatten Mosyle Logs Stream's per-type nested response into one reverse-
+    chronological event list: {when, kind, label, status, device, serial, user}.
+    Tolerant of the differing per-type shapes (compliance by platform,
+    zero_trust under Events, action_logs/av under Logs, dns as a bare list)."""
+    events: list[dict] = []
+    if not isinstance(response, dict):
+        return events
+
+    def add(kind, when, label, status="", device="", serial="", user=""):
+        events.append({
+            "kind": kind,
+            "when": _to_iso(when) or (str(when) if when else ""),
+            "label": label or "", "status": status or "",
+            "device": device or "", "serial": serial or "", "user": user or "",
+        })
+
+    compliance = response.get("compliance")
+    if isinstance(compliance, dict):
+        for sub in compliance.values():
+            for log in (sub.get("Logs") if isinstance(sub, dict) else None) or []:
+                add("compliance", log.get("Timestamp"), log.get("RuleName"),
+                    log.get("Status"), log.get("DeviceName"),
+                    log.get("SerialNumber"), log.get("E-mail"))
+
+    zero_trust = response.get("zero_trust")
+    zt_logs = []
+    if isinstance(zero_trust, dict):
+        events_block = zero_trust.get("Events")
+        zt_logs = ((events_block.get("Logs") if isinstance(events_block, dict) else None)
+                   or zero_trust.get("Logs") or [])
+    for log in zt_logs:
+        add("zero_trust", log.get("Timestamp"),
+            log.get("Application") or log.get("FileName"), log.get("Action"),
+            log.get("Device"), "", log.get("Source"))
+
+    action_logs = response.get("action_logs")
+    for log in (action_logs.get("Logs") if isinstance(action_logs, dict) else None) or []:
+        add("action", log.get("ActionDate"), log.get("Action"), "",
+            "", "", log.get("UserName") or log.get("E-mail"))
+
+    for key in ("dns", "av"):
+        block = response.get(key)
+        block_logs = (block.get("Logs") if isinstance(block, dict)
+                      else block if isinstance(block, list) else None)
+        for log in block_logs or []:
+            if isinstance(log, dict):
+                add(key, log.get("Timestamp"),
+                    log.get("Domain") or log.get("FileName") or log.get("RuleName"),
+                    log.get("Action") or log.get("Status"),
+                    log.get("Device") or log.get("DeviceName"), log.get("SerialNumber"))
+
+    events.sort(key=lambda e: e["when"], reverse=True)
+    return events
+
+
 class MosyleClient:
     """Synchronous, read-only client bound to one Mosyle Business org."""
 
@@ -196,6 +254,8 @@ class MosyleClient:
         self._http = httpx.Client(timeout=60, transport=transport)
         self._jwt: str | None = None
         self._jwt_exp = 0.0
+        self._logs_jwt: str | None = None
+        self._logs_jwt_exp = 0.0
         self._devices_cache: list[dict] | None = None
 
     # -- auth -------------------------------------------------------------
@@ -388,6 +448,57 @@ class MosyleClient:
         return [adapt_group(g, "deviceGroups") for g in
                 self._list_objects("devicegroups", "list_devicegroup",
                                    ("devicegroups", "groups", "device_groups"))]
+
+    # -- logs stream (separate host + token; the device "status channel") --
+
+    def logs_configured(self) -> bool:
+        return bool(self.org.mosyle_logs_token)
+
+    def _logs_login(self) -> str:
+        if self._logs_jwt and self._logs_jwt_exp - 60 > time.time():
+            return self._logs_jwt
+        if not (self.org.mosyle_email and self.org.mosyle_password):
+            raise ApiError(0, "Mosyle Logs Stream needs the admin email/password to log in.")
+        try:
+            resp = self._http.post(
+                f"{MOSYLE_LOGS_BASE}/login",
+                json={"email": self.org.mosyle_email, "password": self.org.mosyle_password},
+                headers={TOKEN_HEADER: self.org.mosyle_logs_token,
+                         "Content-Type": "application/json"})
+        except httpx.HTTPError as exc:
+            raise ApiError(0, f"network error reaching Mosyle Logs /login: {exc}") from exc
+        if resp.status_code != 200:
+            raise ApiError(resp.status_code, f"Mosyle Logs /login failed: {_error_message(resp)}")
+        auth = resp.headers.get("Authorization", "")
+        token = auth[7:].strip() if auth[:7].lower() == "bearer " else auth.strip()
+        if not token:
+            raise ApiError(resp.status_code, "Mosyle Logs /login did not return a Bearer token.")
+        self._logs_jwt = token
+        self._logs_jwt_exp = time.time() + JWT_TTL
+        return token
+
+    def logs(self, log_types: list[str] | None = None, page: int = 1) -> list[dict]:
+        """Logs Stream events (compliance, zero-trust, admin actions, av, dns),
+        normalized + flattened. Empty if Logs Stream isn't configured."""
+        if not self.org.mosyle_logs_token:
+            return []
+        types = log_types or ["compliance", "zero_trust", "action_logs", "av", "dns"]
+        body = {"LogType": types, "page": page}
+        headers = {TOKEN_HEADER: self.org.mosyle_logs_token,
+                   "Content-Type": "application/json",
+                   "Authorization": f"Bearer {self._logs_login()}"}
+        url = f"{MOSYLE_LOGS_BASE}/logsstream"
+        try:
+            resp = self._http.post(url, json=body, headers=headers)
+            if resp.status_code in (401, 403):  # token expired — re-login once
+                self._logs_jwt = None
+                headers["Authorization"] = f"Bearer {self._logs_login()}"
+                resp = self._http.post(url, json=body, headers=headers)
+        except httpx.HTTPError as exc:
+            raise ApiError(0, f"network error: {exc}") from exc
+        if resp.status_code >= 400:
+            raise ApiError(resp.status_code, _error_message(resp))
+        return normalize_logs(resp.json().get("response", {}))
 
     # AppleCare/warranty and ABM assignment have no Mosyle equivalent; return
     # empty so the (gated) device-detail template renders without crashing.
