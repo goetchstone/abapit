@@ -32,6 +32,7 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
           {% if slug != active_org %}
           <form method="post" action="/settings/orgs/{{ slug }}/activate"><button class="btn small">Use</button></form>
           {% endif %}
+          <a class="btn small ghost" href="/settings/orgs/{{ slug }}/edit">Edit</a>
           <form method="post" action="/settings/orgs/{{ slug }}/test"><button class="btn small ghost">Test</button></form>
           <form method="post" action="/settings/orgs/{{ slug }}/probe"><button class="btn small ghost" title="Empirically check what this key's role allows">Permissions</button></form>
           <form method="post" action="/settings/orgs/{{ slug }}/delete"

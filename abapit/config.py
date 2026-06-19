@@ -209,6 +209,42 @@ def _assert_unique_client_id(cfg: Config, client_id: str) -> None:
             "request cache, and snapshot history.")
 
 
+def edit_org(slug: str, **fields) -> None:
+    """Update an existing org's editable fields in place. Blank token/key/
+    password values are treated as 'keep current'; other fields are set to
+    what's submitted (the edit form pre-fills them, so blanks are intentional)."""
+    cfg = load()
+    org = cfg.orgs.get(slug)
+    if org is None:
+        raise ValueError(f"no org named {slug!r}")
+    if fields.get("name"):
+        org.name = fields["name"].strip()
+    if fields.get("role") is not None:
+        org.role = fields["role"].strip()
+    if org.provider == "mosyle":
+        if fields.get("mosyle_token", "").strip():
+            org.mosyle_token = fields["mosyle_token"].strip()
+        if fields.get("mosyle_email") is not None:
+            org.mosyle_email = fields["mosyle_email"].strip()
+        if fields.get("mosyle_password"):  # blank = keep current
+            org.mosyle_password = fields["mosyle_password"]
+        if fields.get("mosyle_logs_token") is not None:
+            org.mosyle_logs_token = fields["mosyle_logs_token"].strip()
+    else:
+        client_id = fields.get("client_id", "").strip()
+        if client_id and client_id != org.client_id:
+            _assert_unique_client_id(cfg, client_id)
+            org.client_id = client_id
+        if fields.get("key_id", "").strip():
+            org.key_id = fields["key_id"].strip()
+        if fields.get("team_id") is not None:
+            org.team_id = fields["team_id"].strip()
+        if fields.get("private_key_pem", "").strip():
+            org.private_key_path = str(
+                save_private_key(slug, normalize_private_key(fields["private_key_pem"])))
+    save(cfg)
+
+
 def add_org(
     name: str,
     scope: str = "business",

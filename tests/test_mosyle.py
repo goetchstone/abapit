@@ -327,6 +327,40 @@ def test_add_mosyle_org_requires_token(tmp_path, monkeypatch):
         config.add_org(name="No Token", provider="mosyle", mosyle_token="")
 
 
+def test_edit_mosyle_org_keeps_blanks_and_updates_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path))
+    slug = config.add_org(name="Acme", provider="mosyle", mosyle_token="tok",
+                          mosyle_email="old@acme.com", mosyle_password="old")
+    config.edit_org(slug, name="Acme Renamed", mosyle_token="", mosyle_email="new@acme.com",
+                    mosyle_password="", mosyle_logs_token="ltok")
+    org = config.load().orgs[slug]
+    assert org.name == "Acme Renamed"
+    assert org.mosyle_email == "new@acme.com"
+    assert org.mosyle_password == "old"        # blank password = keep current
+    assert org.mosyle_token == "tok"           # blank token = keep current
+    assert org.mosyle_logs_token == "ltok"     # newly added
+
+
+def test_web_edit_org_prefills_and_saves(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import abapit.web.app as app_mod
+
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("ABAPIT_DATA_DIR", str(tmp_path / "data"))
+    slug = config.add_org(name="Acme", provider="mosyle", mosyle_token="tok",
+                          mosyle_email="a@acme.com", mosyle_password="pw")
+    client = TestClient(app_mod.create_app(), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    form = client.get(f"/settings/orgs/{slug}/edit")
+    assert form.status_code == 200 and b'value="tok"' in form.content   # pre-filled
+    saved = client.post(f"/settings/orgs/{slug}/edit",
+                        data={"name": "Acme", "token": "tok", "email": "a@acme.com",
+                              "logs_token": "ltok"})
+    assert saved.status_code in (200, 303)
+    assert config.load().orgs[slug].mosyle_logs_token == "ltok"
+
+
 def test_to_iso_normalization():
     from abapit.mosyle import _to_iso
     assert _to_iso(1718000000).startswith("2024-06-10")        # epoch int

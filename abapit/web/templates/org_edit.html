@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block titletag %}Edit {{ eorg.name }} · abapit{% endblock %}
+{% block title %}<a class="crumb" href="/settings">Settings</a> / Edit {{ eorg.name }}{% endblock %}
+{% block content %}
+
+<div class="panels">
+  <section class="panel wide">
+    <h2>Edit {{ 'Mosyle' if eorg.provider == 'mosyle' else 'Apple Business' }} organization</h2>
+    <form method="post" action="/settings/orgs/{{ slug }}/edit" class="form-grid">
+      <label>Display name <input name="name" value="{{ eorg.name }}" required></label>
+
+      {% if eorg.provider == 'mosyle' %}
+      <label class="full">API access token
+        <input name="token" value="{{ eorg.mosyle_token }}" required>
+      </label>
+      <label>Admin email <input name="email" type="email" value="{{ eorg.mosyle_email }}"></label>
+      <label>Admin password <input name="password" type="password" placeholder="leave blank to keep current"></label>
+      <label class="full">Logs Stream access token <span class="muted">(optional)</span>
+        <input name="logs_token" value="{{ eorg.mosyle_logs_token }}" placeholder="blank if unused">
+      </label>
+      {% else %}
+      <label>Client ID <input name="client_id" value="{{ eorg.client_id }}" required></label>
+      <label>Key ID <input name="key_id" value="{{ eorg.key_id }}" required></label>
+      <label>API account's role
+        <input name="role" list="role-suggestions" value="{{ eorg.role }}">
+        <datalist id="role-suggestions">
+          {% for r in suggested_roles %}<option value="{{ r }}">{% endfor %}
+        </datalist>
+      </label>
+      <label class="full">Replace private key <span class="muted">(leave blank to keep the current key)</span>
+        <textarea name="pem" rows="4" placeholder="-----BEGIN PRIVATE KEY-----&#10;…"></textarea>
+      </label>
+      {% endif %}
+
+      <div class="full">
+        <button class="btn primary">Save changes</button>
+        <a class="btn ghost" href="/settings">Cancel</a>
+      </div>
+    </form>
+    <p class="muted footnote">After saving, click <strong>Test</strong> on the Settings page to verify the credentials.</p>
+  </section>
+</div>
+{% endblock %}

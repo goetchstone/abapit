@@ -1021,6 +1021,35 @@ def create_app(demo: bool = False,
             msg = f"Could not add Mosyle org: {exc}"
         return RedirectResponse(f"/settings?msg={quote(msg)}", status_code=303)
 
+    @app.get("/settings/orgs/{slug}/edit", response_class=HTMLResponse)
+    def settings_edit_form(request: Request, slug: str):
+        org = config.load().orgs.get(slug)
+        if org is None:
+            return RedirectResponse(f"/settings?msg={quote('Org not found.')}", status_code=303)
+        return render(request, "org_edit.html", active="settings", slug=slug, eorg=org,
+                      suggested_roles=config.SUGGESTED_ROLES)
+
+    @app.post("/settings/orgs/{slug}/edit")
+    def settings_edit(slug: str, name: str = Form(""), role: str = Form(""),
+                      client_id: str = Form(""), key_id: str = Form(""),
+                      pem: str = Form(""), token: str = Form(""),
+                      email: str = Form(""), password: str = Form(""),
+                      logs_token: str = Form("")):
+        try:
+            config.edit_org(slug, name=name, role=role, client_id=client_id,
+                            key_id=key_id, private_key_pem=pem, mosyle_token=token,
+                            mosyle_email=email, mosyle_password=password,
+                            mosyle_logs_token=logs_token)
+            app.state.clients.pop(slug, None)  # rebuild the client with new creds
+            org = config.load().orgs.get(slug)
+            if org:  # drop cached data fetched under the old credentials
+                app.state.cache = {k: v for k, v in app.state.cache.items()
+                                   if k[0] != org.client_id}
+            msg = f"Updated {name or slug!r}. Click Test to verify."
+        except ValueError as exc:
+            msg = f"Could not update org: {exc}"
+        return RedirectResponse(f"/settings?msg={quote(msg)}", status_code=303)
+
     @app.post("/settings/orgs/{slug}/activate")
     def settings_activate(slug: str):
         config.set_active(slug)
