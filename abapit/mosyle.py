@@ -256,6 +256,7 @@ class MosyleClient:
         self._jwt_exp = 0.0
         self._logs_jwt: str | None = None
         self._logs_jwt_exp = 0.0
+        self.last_log_types: list[str] = []  # streams seen in the last drain
         self._devices_cache: list[dict] | None = None
 
     # -- auth -------------------------------------------------------------
@@ -504,7 +505,9 @@ class MosyleClient:
             raise ApiError(0, f"network error: {exc}") from exc
         if resp.status_code >= 400:
             raise ApiError(resp.status_code, _error_message(resp))
-        return normalize_logs(resp.json().get("response", {}))
+        response = resp.json().get("response", {})
+        self.last_log_types = list(response.keys()) if isinstance(response, dict) else []
+        return normalize_logs(response)
 
     # AppleCare/warranty and ABM assignment have no Mosyle equivalent; return
     # empty so the (gated) device-detail template renders without crashing.

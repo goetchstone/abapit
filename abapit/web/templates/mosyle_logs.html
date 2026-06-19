@@ -12,6 +12,11 @@
 </div>
 {% else %}
 
+<div class="flash">✓ Connected to Mosyle Logs Stream{% if enabled_types %} — streams on:
+  <strong>{{ enabled_types | join(', ') }}</strong>{% endif %}. {{ captured }} event(s)
+  captured so far; the stream drains on read, so new events accumulate here as they
+  occur. Trigger an admin action in Mosyle (or wait for a compliance change) to see one land.</div>
+
 <div class="cards">
   <div class="card{% if non_compliant %} warn{% endif %}">
     <div class="num">{{ non_compliant }}</div><div class="label">Compliance events lost</div></div>

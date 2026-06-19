@@ -613,7 +613,9 @@ def create_app(demo: bool = False,
         events = [e for e in all_events if not type or e["kind"] == type]
         return render(request, "mosyle_logs.html", active="mosyle_logs",
                       events=events[:MAX_TABLE_ROWS], counts=counts,
-                      non_compliant=non_compliant, type=type, total=len(events))
+                      non_compliant=non_compliant, type=type, total=len(events),
+                      captured=len(all_events),
+                      enabled_types=getattr(c, "last_log_types", []))
 
     @app.get("/user-groups/{group_id}", response_class=HTMLResponse)
     def group_page(request: Request, group_id: str):
