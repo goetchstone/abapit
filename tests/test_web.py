@@ -22,6 +22,31 @@ def test_pages_render(web):
         assert web.get(path).status_code == 200, path
 
 
+def test_blueprint_management_forms_show_in_demo(web):
+    r = web.get("/blueprints/demo-blueprint-0")
+    assert r.status_code == 200
+    assert b'name="rel"' in r.content and b'value="users"' in r.content  # management forms present
+
+
+def test_blueprint_relationship_preview_flags_unknown(web):
+    r = web.post("/blueprints/demo-blueprint-0/relationships",
+                 data={"rel": "apps", "op": "add", "ids": "NOPE-ID", "mode": "preview"})
+    assert r.status_code == 200 and b"NOPE-ID" in r.content  # unknown id flagged, nothing sent
+
+
+def test_blueprint_relationship_execute_adds_then_removes():
+    # fresh app so mutation doesn't pollute the module-scoped demo state
+    client = TestClient(create_app(demo=True), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    bp = "demo-blueprint-0"
+    client.post(f"/blueprints/{bp}/relationships",
+                data={"rel": "users", "op": "add", "ids": "demo-user-0", "mode": "execute"})
+    assert b"demo-user-0" in client.get(f"/blueprints/{bp}").content
+    client.post(f"/blueprints/{bp}/relationships",
+                data={"rel": "users", "op": "remove", "ids": "demo-user-0", "mode": "execute"})
+    assert b"demo-user-0" not in client.get(f"/blueprints/{bp}").content
+
+
 def test_org_units_list_and_detail_and_csv(web):
     listing = web.get("/org-units")
     assert listing.status_code == 200 and b"Headquarters" in listing.content

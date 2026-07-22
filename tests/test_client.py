@@ -119,6 +119,53 @@ def test_api_error_surfaces_apple_error_detail(org, fake_tokens):
     assert "No access" in str(exc.value)
 
 
+def test_blueprint_relationship_add_sends_jsonapi(org, fake_tokens):
+    import json
+    captured = {}
+
+    def handler(request):
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(204)  # relationship writes return No Content
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    client.add_blueprint_relationship("BP1", "apps", ["A1", "A2"])
+    assert captured["method"] == "POST"
+    assert captured["path"].endswith("/blueprints/BP1/relationships/apps")
+    assert captured["body"] == {"data": [{"type": "apps", "id": "A1"},
+                                         {"type": "apps", "id": "A2"}]}
+
+
+def test_blueprint_relationship_remove_uses_delete_and_orgdevices_type(org, fake_tokens):
+    import json
+    captured = {}
+
+    def handler(request):
+        captured["method"] = request.method
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(204)
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    client.remove_blueprint_relationship("BP1", "devices", ["S1"])
+    assert captured["method"] == "DELETE"
+    assert captured["body"] == {"data": [{"type": "orgDevices", "id": "S1"}]}  # segment devices, type orgDevices
+
+
+def test_write_probes_classify_forbidden_and_ok(org, fake_tokens):
+    def handler(request):
+        # blueprint-relationship write probe forbidden; the rest allowed (404)
+        if "/blueprints/" in request.url.path:
+            return httpx.Response(403, json={"errors": [{"title": "Forbidden"}]})
+        return httpx.Response(404, json={"errors": [{"title": "Not found"}]})
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    status = {r["section"]: r["status"] for r in client.probe_capabilities()}
+    assert status["blueprints_write"] == "forbidden"
+    assert status["configurations_write"] == "ok"   # 404 => role allows the write
+    assert status["mdm_servers_write"] == "ok"
+
+
 def test_demo_client_mirrors_api_client_interface():
     api_methods = {name for name in dir(ApiClient)
                    if not name.startswith("_")

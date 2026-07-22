@@ -4,6 +4,36 @@
 {% block title %}<a class="crumb" href="/blueprints">Blueprints</a> / {{ blueprint.attributes.get('name', blueprint.id) }}{% endblock %}
 {% block content %}
 
+{% if rel_plan %}
+{% set p = rel_plan.plan %}
+<div class="panels">
+  <section class="panel wide">
+    <h2>Review — {{ rel_plan.op }} {{ rel_plan.title }}</h2>
+    {% if p.changes %}
+    <p><strong>{{ p.changes | length }}</strong> {{ rel_plan.title | lower }} will be
+      {{ 'added to' if rel_plan.op == 'add' else 'removed from' }} this blueprint:</p>
+    <ul class="plain">
+      {% for r in p.changes %}<li>{{ r.label }} <span class="muted"><code>{{ r.id }}</code></span></li>{% endfor %}
+    </ul>
+    <form method="post" action="/blueprints/{{ blueprint_id }}/relationships"
+          onsubmit="return confirm('Really {{ rel_plan.op }} {{ p.changes | length }} {{ rel_plan.title | lower }}? This changes your org.')">
+      <input type="hidden" name="rel" value="{{ rel_plan.rel }}">
+      <input type="hidden" name="op" value="{{ rel_plan.op }}">
+      <input type="hidden" name="ids" value="{{ rel_plan.ids }}">
+      <input type="hidden" name="mode" value="execute">
+      <button class="btn primary">Confirm — {{ rel_plan.op }} {{ p.changes | length }} {{ rel_plan.title | lower }}</button>
+      <a class="btn ghost" href="/blueprints/{{ blueprint_id }}">Cancel</a>
+    </form>
+    {% else %}
+    <p class="muted">Nothing to do — no requested item needs this change.
+      <a href="/blueprints/{{ blueprint_id }}">Back</a></p>
+    {% endif %}
+    {% if p.noops %}<p class="muted">Skipped: {% for n in p.noops %}<code>{{ n.id }}</code> ({{ n.reason }}){% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+    {% if p.unknown %}<p class="warn-text">Not found in this org: {% for u in p.unknown %}<code>{{ u }}</code> {% endfor %}</p>{% endif %}
+  </section>
+</div>
+{% endif %}
+
 <div class="panels">
   <section class="panel">
     <h2>Blueprint details</h2>
@@ -25,4 +55,26 @@
     {% endfor %}
   </section>
 </div>
+
+{% if 'blueprints_write' in writable and rels %}
+<div class="flash stale">&#9888;&#65039; <strong>Editing a blueprint's members
+re-provisions real devices and people.</strong> Every change is previewed before it's sent.</div>
+<div class="panels">
+  {% for r in rels %}
+  <section class="panel">
+    <h2>{{ r.title }} <span class="count">{{ r.current | length }}</span></h2>
+    {% if r.current %}
+    <ul class="plain">{% for m in r.current[:100] %}<li>{{ m.label }} <span class="muted"><code>{{ m.id }}</code></span></li>{% endfor %}</ul>
+    {% else %}<p class="muted">None attached.</p>{% endif %}
+    <form method="post" action="/blueprints/{{ blueprint_id }}/relationships" class="toolbar">
+      <input type="hidden" name="rel" value="{{ r.key }}">
+      <input type="hidden" name="mode" value="preview">
+      <select name="op"><option value="add">Add</option><option value="remove">Remove</option></select>
+      <input name="ids" placeholder="ids (space/comma separated)">
+      <button class="btn small">Preview…</button>
+    </form>
+  </section>
+  {% endfor %}
+</div>
+{% endif %}
 {% endblock %}

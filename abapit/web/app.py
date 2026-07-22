@@ -26,6 +26,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .. import __version__, config, history
 from ..assign import plan as plan_assignment
+from ..blueprint_plan import plan_relationship
 from ..auth import AuthError, token_cache
 from ..client import ApiError, sections_for
 from ..demo import DemoClient
@@ -88,6 +89,10 @@ SNAPSHOT_RESOURCES = {
 }
 
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+# Write-capability keys (match ApiClient.WRITE_PROBES); forms render only when
+# the active org's role is probed `ok` or not-yet-probed (optimistic).
+WRITE_SECTIONS = ("blueprints_write", "configurations_write", "mdm_servers_write")
 
 log = logging.getLogger("abapit")
 
@@ -348,6 +353,8 @@ def create_app(demo: bool = False,
         # Locks must reflect the config as of THIS request — never the Org
         # snapshot frozen inside a cached ApiClient.
         fresh_org = cfg.get_active() if cfg else None
+        caps = fresh_org.capabilities if fresh_org else {}
+        writable = {k for k in WRITE_SECTIONS if caps.get(k) != "forbidden"}
         return templates.TemplateResponse(request, template, {
             "active": active,
             "version": __version__,
@@ -361,6 +368,7 @@ def create_app(demo: bool = False,
             "active_org": cfg.active_org if cfg else "demo",
             "msg": request.query_params.get("msg", ""),
             "allowed": allowed,
+            "writable": writable,
             **ctx,
         })
 
@@ -673,16 +681,92 @@ def create_app(demo: bool = False,
         return render(request, "blueprints.html", active="blueprints",
                       blueprints=blueprints)
 
-    @app.get("/blueprints/{blueprint_id}", response_class=HTMLResponse)
-    def blueprint_page(request: Request, blueprint_id: str):
-        guard("blueprints")
-        body = client().blueprint(
-            blueprint_id, include="apps,packages,configurations,userGroups")
+    BP_RELS = ("apps", "configurations", "packages", "userGroups", "devices", "users")
+    BP_REL_TITLES = {"apps": "Apps", "configurations": "Configurations",
+                     "packages": "Packages", "userGroups": "User Groups",
+                     "devices": "Devices", "users": "Users"}
+
+    def _is_writable(key: str) -> bool:
+        if app.state.demo:
+            return True
+        org = config.load().get_active()
+        return bool(org) and org.capabilities.get(key) != "forbidden"
+
+    def _bp_catalog(c, rel: str) -> dict:
+        """id -> display label for a relationship's selectable items."""
+        if rel == "apps":
+            items, label = cached("apps", lambda cc: cc.apps()), (
+                lambda a: a["attributes"].get("name") or a["attributes"].get("bundleId") or a["id"])
+        elif rel == "configurations":
+            items, label = cached("configurations", lambda cc: cc.configurations()), (
+                lambda x: x["attributes"].get("name") or x["id"])
+        elif rel == "packages":
+            items, label = cached("packages", lambda cc: cc.packages()), (
+                lambda x: x["attributes"].get("name") or x["id"])
+        elif rel == "userGroups":
+            items, label = cached("user_groups", lambda cc: cc.user_groups()), (
+                lambda g: g["attributes"].get("name") or g["id"])
+        elif rel == "devices":
+            items, label = cached("devices", lambda cc: cc.devices()), (
+                lambda d: (d["attributes"].get("deviceModel") or "").strip() or d["id"])
+        else:  # users
+            items, label = cached("users", lambda cc: cc.users()), (
+                lambda u: u["attributes"].get("managedAppleAccount")
+                or u["attributes"].get("email") or u["id"])
+        return {i["id"]: label(i) for i in items}
+
+    def _render_blueprint(request: Request, blueprint_id: str, rel_plan=None):
+        c = client()
+        body = c.blueprint(blueprint_id, include="apps,packages,configurations,userGroups")
         included: dict[str, list] = {}
         for item in body.get("included", []):
             included.setdefault(item.get("type", "other"), []).append(item)
+        rels = []
+        if _is_writable("blueprints_write"):  # skip heavy catalogs for read-only roles
+            for rel in BP_RELS:
+                catalog = _bp_catalog(c, rel)
+                current = c.blueprint_relationship_ids(blueprint_id, rel)  # not cached: fresh after writes
+                rels.append({"key": rel, "title": BP_REL_TITLES[rel],
+                             "current": [{"id": i, "label": catalog.get(i, i)} for i in current]})
         return render(request, "blueprint_detail.html", active="blueprints",
-                      blueprint=body.get("data", {}), included=included)
+                      blueprint=body.get("data", {}), included=included,
+                      blueprint_id=blueprint_id, rels=rels, rel_plan=rel_plan)
+
+    @app.get("/blueprints/{blueprint_id}", response_class=HTMLResponse)
+    def blueprint_page(request: Request, blueprint_id: str):
+        guard("blueprints")
+        return _render_blueprint(request, blueprint_id)
+
+    @app.post("/blueprints/{blueprint_id}/relationships", response_class=HTMLResponse)
+    def blueprint_rel_submit(request: Request, blueprint_id: str, rel: str = Form(...),
+                             op: str = Form("add"), ids: str = Form(""),
+                             mode: str = Form("preview")):
+        guard("blueprints")
+        if rel not in BP_RELS:
+            raise ApiError(400, f"unknown blueprint relationship {rel!r}")
+        c = client()
+        catalog = _bp_catalog(c, rel)
+        current = c.blueprint_relationship_ids(blueprint_id, rel)
+        selected = ids.replace(",", " ").replace(";", " ").split()
+        p = plan_relationship(op, selected, current, catalog)
+        if mode == "execute" and p["changes"]:
+            change_ids = [row["id"] for row in p["changes"]]
+            if op == "add":
+                c.add_blueprint_relationship(blueprint_id, rel, change_ids)
+            else:
+                c.remove_blueprint_relationship(blueprint_id, rel, change_ids)
+            org_key = c.org.client_id
+            app.state.cache = {k: v for k, v in app.state.cache.items()
+                               if not (k[0] == org_key and k[1] == "blueprints")}
+            verb = "Added" if op == "add" else "Removed"
+            prep = "to" if op == "add" else "from"
+            msg = (f"{verb} {len(change_ids)} {BP_REL_TITLES[rel].lower()} "
+                   f"{prep} this blueprint.")
+            return RedirectResponse(f"/blueprints/{blueprint_id}?msg={quote(msg)}",
+                                    status_code=303)
+        return _render_blueprint(request, blueprint_id,
+                                 rel_plan={"rel": rel, "title": BP_REL_TITLES[rel],
+                                           "op": op, "ids": ids, "plan": p})
 
     @app.get("/configurations", response_class=HTMLResponse)
     def configurations_page(request: Request):

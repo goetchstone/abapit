@@ -255,6 +255,18 @@ class DemoClient:
                        + rng.sample(self._packages, 1))
             for bp in self._blueprints
         }
+        # Per-relationship member sets (mutable — the write flow adds/removes).
+        self._blueprint_rel: dict[str, dict[str, set]] = {}
+        for bp in self._blueprints:
+            inc = self._blueprint_includes[bp["id"]]
+            self._blueprint_rel[bp["id"]] = {
+                "apps": {a["id"] for a in inc if a["type"] == "apps"},
+                "configurations": {a["id"] for a in inc if a["type"] == "configurations"},
+                "packages": {a["id"] for a in inc if a["type"] == "packages"},
+                "userGroups": {g["id"] for g in rng.sample(self._groups, 2)},
+                "devices": {d["id"] for d in rng.sample(self._devices, 5)},
+                "users": {u["id"] for u in rng.sample(self._users, 3)},
+            }
 
         self._audit_events = []
         for i in range(40):
@@ -344,6 +356,17 @@ class DemoClient:
         data = next((b for b in self._blueprints if b["id"] == blueprint_id), {})
         return {"data": data, "included": self._blueprint_includes.get(blueprint_id, [])}
 
+    def blueprint_relationship_ids(self, blueprint_id: str, rel: str) -> list[str]:
+        return sorted(self._blueprint_rel.get(blueprint_id, {}).get(rel, set()))
+
+    def add_blueprint_relationship(self, blueprint_id: str, rel: str, ids: list[str]) -> dict:
+        self._blueprint_rel.setdefault(blueprint_id, {}).setdefault(rel, set()).update(ids)
+        return {}
+
+    def remove_blueprint_relationship(self, blueprint_id: str, rel: str, ids: list[str]) -> dict:
+        self._blueprint_rel.setdefault(blueprint_id, {}).setdefault(rel, set()).difference_update(ids)
+        return {}
+
     def configurations(self) -> list[dict]:
         return self._configurations
 
@@ -409,6 +432,8 @@ class DemoClient:
                    for section, label, _, _, _ in ApiClient.READ_PROBES]
         results.append({"section": "assign", "capability": "Device assignment",
                         "kind": "write", "status": "ok"})
+        results += [{"section": section, "capability": label, "kind": "write",
+                     "status": "ok"} for section, label, _ in ApiClient.WRITE_PROBES]
         return results
 
     def ping(self) -> None:

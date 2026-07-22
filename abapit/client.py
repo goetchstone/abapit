@@ -135,7 +135,10 @@ class ApiClient:
         log.info("%s %s -> %d (%.0f ms)", method, url, resp.status_code, elapsed_ms)
         if resp.status_code >= 400:
             raise ApiError(resp.status_code, _error_message(resp))
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:
+            return {}  # 204 No Content (relationship add/remove, delete)
 
     def get(self, path: str, params: dict | None = None) -> dict:
         return self._request(f"{self.base_url}/v1/{path}", params)
@@ -229,6 +232,16 @@ class ApiClient:
         ("audit_events", "Audit events", "auditEvents", None, True),  # params at runtime
     )
 
+    # (section key, label, resource) — probed with a STRUCTURALLY HARMLESS
+    # mutation against a non-existent id so it can never change anything:
+    # 403 => forbidden, a validation/not-found (400/404/409/422) => allowed.
+    WRITE_PROBES = (
+        ("blueprints_write", "Blueprint management", "blueprints"),
+        ("configurations_write", "Configuration management", "configurations"),
+        ("mdm_servers_write", "MDM server management", "mdmServers"),
+    )
+    ZERO_UUID = "00000000-0000-0000-0000-000000000000"
+
     def probe_capabilities(self) -> list[dict]:
         """Empirically map what this API account's role allows.
 
@@ -271,6 +284,27 @@ class ApiClient:
                 status = f"error {exc.status}"
         results.append({"section": "assign", "capability": "Device assignment",
                         "kind": "write", "status": status})
+
+        # New v2.0+ writes (Business only): blueprint/config/mdm-server management.
+        if self.org.scope == "business":
+            for section, label, resource in self.WRITE_PROBES:
+                try:
+                    if resource == "blueprints":
+                        self._request(f"{self.base_url}/v1/blueprints/"
+                                      f"{self.ZERO_UUID}/relationships/apps",
+                                      method="POST", json_body={"data": []})
+                    else:
+                        self._request(f"{self.base_url}/v1/{resource}/{self.ZERO_UUID}",
+                                      method="PATCH", json_body={"data": {
+                                          "type": resource, "id": self.ZERO_UUID,
+                                          "attributes": {}}})
+                    status = "ok"
+                except ApiError as exc:
+                    status = ("forbidden" if exc.status == 403 else
+                              "ok" if exc.status in (400, 404, 409, 422)
+                              else f"error {exc.status}")
+                results.append({"section": section, "capability": label,
+                                "kind": "write", "status": status})
         return results
 
     # -- people (Business API only) -----------------------------------------
@@ -317,6 +351,40 @@ class ApiClient:
     def blueprint(self, blueprint_id: str, include: str = "") -> dict:
         params = {"include": include} if include else None
         return self.get(f"blueprints/{blueprint_id}", params)
+
+    # Blueprint relationship: UI key -> (URL segment, JSON:API resource type).
+    # Segments/types confirmed against abapit's existing reads where possible
+    # (orgDevices is the device type per create_device_activity); confirm the
+    # rest against the live reference.
+    BLUEPRINT_RELATIONSHIPS = {
+        "apps": ("apps", "apps"),
+        "packages": ("packages", "packages"),
+        "configurations": ("configurations", "configurations"),
+        "userGroups": ("userGroups", "userGroups"),
+        "devices": ("devices", "orgDevices"),
+        "users": ("users", "users"),
+    }
+
+    def blueprint_relationship_ids(self, blueprint_id: str, rel: str) -> list[str]:
+        segment, _ = self.BLUEPRINT_RELATIONSHIPS[rel]
+        linkages = self.list_all(f"blueprints/{blueprint_id}/relationships/{segment}")
+        return [item.get("id", "") for item in linkages]
+
+    def add_blueprint_relationship(self, blueprint_id: str, rel: str,
+                                   ids: list[str]) -> dict:
+        return self._blueprint_rel_write(blueprint_id, rel, ids, "POST")
+
+    def remove_blueprint_relationship(self, blueprint_id: str, rel: str,
+                                      ids: list[str]) -> dict:
+        return self._blueprint_rel_write(blueprint_id, rel, ids, "DELETE")
+
+    def _blueprint_rel_write(self, blueprint_id: str, rel: str,
+                             ids: list[str], method: str) -> dict:
+        segment, type_ = self.BLUEPRINT_RELATIONSHIPS[rel]
+        body = {"data": [{"type": type_, "id": i} for i in ids]}
+        return self._request(
+            f"{self.base_url}/v1/blueprints/{blueprint_id}/relationships/{segment}",
+            method=method, json_body=body)
 
     def configurations(self) -> list[dict]:
         return self.list_all("configurations")
