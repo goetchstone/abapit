@@ -50,6 +50,7 @@ NAV = [
     ("People", [
         ("users", "/users", "Users"),
         ("user_groups", "/user-groups", "User Groups"),
+        ("org_units", "/org-units", "Org Units"),
     ]),
     ("Content", [
         ("apps", "/apps", "Apps"),
@@ -101,6 +102,7 @@ RESOURCES = {
     "mdm-enrolled": ("mdm_enrolled_devices", "Apple MDM Enrolled Devices"),
     "users": ("users", "Users"),
     "user-groups": ("user_groups", "User Groups"),
+    "org-units": ("org_units", "Org Units"),
     "device-groups": ("device_groups", "Device Groups"),
     "apps": ("apps", "Apps"),
     "packages": ("packages", "Packages"),
@@ -582,6 +584,25 @@ def create_app(demo: bool = False,
                           title="User Groups", header=header, rows=table,
                           export="user-groups")
         return render(request, "user_groups.html", active="user_groups", groups=groups)
+
+    @app.get("/org-units", response_class=HTMLResponse)
+    def org_units_page(request: Request):
+        guard("org_units")
+        units = cached("org_units", lambda c: c.org_units())
+        header, table = items_to_rows(units)
+        return render(request, "generic_table.html", active="org_units",
+                      title="Organizational Units", header=header, rows=table,
+                      export="org-units")
+
+    @app.get("/org-units/{org_unit_id}", response_class=HTMLResponse)
+    def org_unit_page(request: Request, org_unit_id: str):
+        guard("org_units")
+        item = cached(f"org_unit:{org_unit_id}", lambda c: c.org_unit(org_unit_id))
+        return render(request, "item_detail.html", active="org_units",
+                      title=item.get("attributes", {}).get("name", org_unit_id),
+                      back_href="/org-units", back_label="Org Units",
+                      plain_attrs=item.get("attributes", {}),
+                      payload="", payload_label="")
 
     @app.get("/device-groups", response_class=HTMLResponse)
     def device_groups_page(request: Request):

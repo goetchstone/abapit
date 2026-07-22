@@ -33,6 +33,7 @@ BUSINESS_SECTIONS = (
     "mdm_enrolled",
     "users",
     "user_groups",
+    "org_units",
     "apps",
     "packages",
     "blueprints",
@@ -220,6 +221,7 @@ class ApiClient:
         ("mdm_enrolled", "Apple MDM enrolled", "mdmDevices", {"limit": 1}, True),
         ("users", "Users", "users", {"limit": 1}, True),
         ("user_groups", "User groups", "userGroups", {"limit": 1}, True),
+        ("org_units", "Org units", "orgUnits", {"limit": 1}, True),
         ("apps", "Apps", "apps", {"limit": 1}, True),
         ("packages", "Packages", "packages", {"limit": 1}, True),
         ("blueprints", "Blueprints", "blueprints", {"limit": 1}, True),
@@ -287,6 +289,18 @@ class ApiClient:
 
     def user_group_member_ids(self, group_id: str) -> list[str]:
         linkages = self.list_all(f"userGroups/{group_id}/relationships/users")
+        return [item.get("id", "") for item in linkages]
+
+    # -- organizational units (Business API only) -----------------------------
+
+    def org_units(self) -> list[dict]:
+        return self.list_all("orgUnits")
+
+    def org_unit(self, org_unit_id: str) -> dict:
+        return self.get(f"orgUnits/{org_unit_id}").get("data", {})
+
+    def org_unit_user_ids(self, org_unit_id: str) -> list[str]:
+        linkages = self.list_all(f"orgUnits/{org_unit_id}/relationships/users")
         return [item.get("id", "") for item in linkages]
 
     # -- content (Business API only) ------------------------------------------

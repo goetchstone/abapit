@@ -208,6 +208,16 @@ class DemoClient:
                 "updatedDateTime": _iso(now - timedelta(days=rng.randrange(0, 60))),
             }})
 
+        self._org_units, self._org_unit_members = [], {}
+        for i, ouname in enumerate(["Headquarters", "Warehouse", "Retail"]):
+            ouid = f"demo-ou-{i}"
+            members = [u["id"] for u in self._users if rng.random() < 0.4]
+            self._org_unit_members[ouid] = members
+            self._org_units.append({"type": "orgUnits", "id": ouid, "attributes": {
+                "name": ouname, "totalUserCount": len(members),
+                "createdDateTime": _iso(now - timedelta(days=500)),
+            }})
+
         self._apps = [{"type": "apps", "id": f"demo-app-{i}", "attributes": {
             "name": name, "bundleId": bundle, "supportedOS": [oses],
             "version": f"{rng.randrange(1, 30)}.{rng.randrange(10)}.{rng.randrange(10)}",
@@ -311,6 +321,15 @@ class DemoClient:
 
     def user_group_member_ids(self, group_id: str) -> list[str]:
         return self._group_members.get(group_id, [])
+
+    def org_units(self) -> list[dict]:
+        return self._org_units
+
+    def org_unit(self, org_unit_id: str) -> dict:
+        return next((o for o in self._org_units if o["id"] == org_unit_id), {})
+
+    def org_unit_user_ids(self, org_unit_id: str) -> list[str]:
+        return self._org_unit_members.get(org_unit_id, [])
 
     def apps(self) -> list[dict]:
         return self._apps

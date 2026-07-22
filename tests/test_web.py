@@ -17,9 +17,18 @@ def web():
 
 def test_pages_render(web):
     for path in ("/", "/devices", "/mdm-servers", "/users", "/blueprints",
-                 "/settings", "/audit-events", "/reports/coverage",
+                 "/org-units", "/settings", "/audit-events", "/reports/coverage",
                  "/reports/fleet-age"):
         assert web.get(path).status_code == 200, path
+
+
+def test_org_units_list_and_detail_and_csv(web):
+    listing = web.get("/org-units")
+    assert listing.status_code == 200 and b"Headquarters" in listing.content
+    detail = web.get("/org-units/demo-ou-0")
+    assert detail.status_code == 200 and b"Headquarters" in detail.content
+    csv = web.get("/export/org-units.csv")
+    assert csv.status_code == 200 and csv.headers["content-type"].startswith("text/csv")
 
 
 # ---- security middleware ---------------------------------------------------
