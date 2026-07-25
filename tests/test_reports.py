@@ -201,3 +201,11 @@ def test_mosyle_stale_devices_threshold_and_never():
     assert report["never_count"] == 1
     assert report["stale_count"] == 3
     assert report["rows"][0]["days_stale"] is None
+
+
+def test_csv_header_row_is_also_injection_safe():
+    from abapit.reports import items_to_csv
+    # Mosyle passes unmapped API keys straight through as attribute names, so a
+    # hostile key becomes a CSV *header* cell.
+    body = items_to_csv([{"type": "x", "id": "1", "attributes": {"=cmd|calc": "ok"}}])
+    assert "'=cmd|calc" in body.splitlines()[0]

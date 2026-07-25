@@ -68,6 +68,17 @@ def test_cross_origin_post_blocked(web):
     assert resp.status_code == 403
 
 
+def test_other_localhost_port_origin_is_blocked(web):
+    """Another app on a different loopback PORT is a different origin — and
+    browsers label it `same-site` for localhost, so both checks must reject it."""
+    resp = web.post("/refresh", data={"next": "/"},
+                    headers={"Origin": "http://localhost:3000"})
+    assert resp.status_code == 403
+    resp = web.post("/refresh", data={"next": "/"},
+                    headers={"Sec-Fetch-Site": "same-site"})
+    assert resp.status_code == 403
+
+
 def test_cross_site_fetch_post_blocked(web):
     resp = web.post("/refresh", data={"next": "/"},
                     headers={"Sec-Fetch-Site": "cross-site"})

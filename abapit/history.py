@@ -329,7 +329,11 @@ def append_mosyle_logs(client_id: str, events: list, cap: int = 2000) -> list:
     merged = existing + [e for e in events if _log_key(e) not in seen]
     merged.sort(key=lambda e: e.get("when", ""), reverse=True)
     merged = merged[:cap]
+    # Same posture as the rest of abapit's data (0700 dir / 0600 file): these
+    # logs carry device names, serials, and user email addresses.
     path = _mosyle_logs_path(client_id)
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
     path.write_text(json.dumps(merged))
+    path.chmod(0o600)
     return merged

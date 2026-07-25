@@ -24,6 +24,8 @@ from .assign import plan as plan_assignment
 from .auth import AuthError, request_access_token
 from .client import ApiError
 
+LOCAL_HOSTS_CLI = ("127.0.0.1", "localhost", "::1")
+
 EXPORT_RESOURCES = {
     "devices": "devices",
     "mdm-servers": "mdm_servers",
@@ -56,9 +58,21 @@ def cmd_serve(args) -> None:
     import uvicorn
     from .web.app import create_app
 
-    # Host-header protection can only enumerate hosts we know; if the user
-    # deliberately binds wide, disable it (they get the warning below).
-    allowed_hosts = None if args.host in ("127.0.0.1", "localhost") else ["*"]
+    # Host-header protection can only enumerate hosts we know. Binding wide
+    # used to pass ["*"], which disabled the Host check entirely and re-opened
+    # DNS rebinding; instead build a concrete allowlist from the bind address
+    # and this machine's names, so the check keeps working off-localhost.
+    if args.host in ("127.0.0.1", "localhost"):
+        allowed_hosts = None  # create_app() defaults to the loopback names
+    else:
+        import socket
+        names = {args.host, socket.gethostname(), f"{socket.gethostname()}.local",
+                 *LOCAL_HOSTS_CLI}
+        try:
+            names.add(socket.gethostbyname(socket.gethostname()))
+        except OSError:
+            pass
+        allowed_hosts = sorted(n for n in names if n)
     app = create_app(demo=args.demo, allowed_hosts=allowed_hosts)
     url = f"http://{args.host}:{args.port}"
     if not args.no_browser:

@@ -12,7 +12,6 @@
 # bundle with a Developer ID and notarize it (see README).
 set -eu
 
-PYVER="${PYVER:-3.12}"
 PORT="${ABAPIT_PORT:-8866}"
 LABEL="io.abapit.serve"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,15 +27,32 @@ case "$(uname -m)" in
   *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
 esac
 
-echo "==> resolving python-build-standalone CPython $PYVER for $TRIPLE"
-URL="$(curl -fsSL https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest \
-  | grep -o "https://[^\"]*cpython-${PYVER}\.[0-9][0-9]*%2B[0-9]*-${TRIPLE}-install_only\.tar\.gz" \
-  | head -1)"
-[ -n "$URL" ] || { echo "could not find a CPython $PYVER build for $TRIPLE" >&2; exit 1; }
-echo "    $URL"
+# PINNED interpreter + SHA-256. We ship this thing as a login service, so the
+# build must not silently follow "latest" — an upstream account compromise or a
+# MITM would otherwise land arbitrary code in the bundle. To upgrade: bump
+# PBS_RELEASE/PBS_VERSION, download both assets, and paste their new checksums.
+PBS_RELEASE="20260610"
+PBS_VERSION="3.12.13"
+case "$TRIPLE" in
+  aarch64-apple-darwin) PBS_SHA256="e18ddd4c1e8f4a1d6c4590b37f423d76aec734447edc20ed08e93983d95f2132" ;;
+  x86_64-apple-darwin)  PBS_SHA256="ba02164e4db381af8c288c0bc1657584a835e9121a0fa2836b0f2e712ff8cdf5" ;;
+esac
+URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/cpython-${PBS_VERSION}%2B${PBS_RELEASE}-${TRIPLE}-install_only.tar.gz"
 
-echo "==> downloading + extracting the interpreter"
+echo "==> downloading CPython ${PBS_VERSION} (${PBS_RELEASE}) for $TRIPLE"
+echo "    $URL"
 curl -fSL "$URL" -o "$BUILD/python.tar.gz"
+
+echo "==> verifying checksum"
+ACTUAL="$(shasum -a 256 "$BUILD/python.tar.gz" | awk '{print $1}')"
+if [ "$ACTUAL" != "$PBS_SHA256" ]; then
+  echo "CHECKSUM MISMATCH — refusing to build." >&2
+  echo "  expected $PBS_SHA256" >&2
+  echo "  actual   $ACTUAL" >&2
+  exit 1
+fi
+echo "    ok ($ACTUAL)"
+
 tar -xzf "$BUILD/python.tar.gz" -C "$BUILD"   # -> $BUILD/python/
 PY="$BUILD/python/bin/python3"
 "$PY" --version

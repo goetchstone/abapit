@@ -228,7 +228,9 @@ def edit_org(slug: str, **fields) -> None:
             org.mosyle_email = fields["mosyle_email"].strip()
         if fields.get("mosyle_password"):  # blank = keep current
             org.mosyle_password = fields["mosyle_password"]
-        if fields.get("mosyle_logs_token") is not None:
+        # Secrets are never rendered back into the edit form, so a blank field
+        # means "keep current" — never "clear it".
+        if fields.get("mosyle_logs_token", "").strip():
             org.mosyle_logs_token = fields["mosyle_logs_token"].strip()
     else:
         client_id = fields.get("client_id", "").strip()

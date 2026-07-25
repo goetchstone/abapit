@@ -369,12 +369,20 @@ def test_web_edit_org_prefills_and_saves(tmp_path, monkeypatch):
     client = TestClient(app_mod.create_app(), base_url="http://127.0.0.1",
                         follow_redirects=False)
     form = client.get(f"/settings/orgs/{slug}/edit")
-    assert form.status_code == 200 and b'value="tok"' in form.content   # pre-filled
+    assert form.status_code == 200
+    assert b"a@acme.com" in form.content        # non-secret fields pre-fill
+    # Secrets are NEVER echoed back as input values ("token"/"tokens" in the
+    # surrounding labels is fine — the stored secret value must not appear).
+    assert b'value="tok"' not in form.content
+    assert b'value="pw"' not in form.content
+    # Blank secret fields mean "keep current"; a supplied one is stored.
     saved = client.post(f"/settings/orgs/{slug}/edit",
-                        data={"name": "Acme", "token": "tok", "email": "a@acme.com",
-                              "logs_token": "ltok"})
+                        data={"name": "Acme", "token": "", "email": "a@acme.com",
+                              "password": "", "logs_token": "ltok"})
     assert saved.status_code in (200, 303)
-    assert config.load().orgs[slug].mosyle_logs_token == "ltok"
+    org = config.load().orgs[slug]
+    assert org.mosyle_logs_token == "ltok"
+    assert org.mosyle_token == "tok" and org.mosyle_password == "pw"  # kept
 
 
 def test_to_iso_normalization():

@@ -202,30 +202,41 @@ profiles; switch from the header dropdown.
 
 - **Network**: binds `127.0.0.1` only by default. Requests with an
   unrecognized `Host` header are rejected (blocks DNS-rebinding attacks),
-  and cross-origin browser POSTs are refused (blocks CSRF against the
-  settings/snapshot endpoints from malicious websites). Binding to anything
-  other than localhost disables Host checking and prints a loud warning —
+  and cross-origin browser POSTs are refused (blocks CSRF). The origin check
+  compares the **full** origin including port — another app on a different
+  loopback port is a different origin, and browsers label such requests
+  `same-site`, so those are rejected too. Binding beyond localhost keeps Host
+  checking on (restricted to this machine's names) and prints a loud warning —
   the app deliberately has no login of its own.
-- **Credentials**: private keys are stored as separate files under
+- **Credentials**: Apple private keys are stored as separate files under
   `~/.config/abapit/keys/` with `0600` permissions in a `0700` directory;
-  the config JSON holds only paths. Keys are validated and canonicalized at
-  add time. Bearer tokens live in memory only and are never logged.
-- **Data at rest**: the snapshot database (your full inventory) is
-  `0600` in a `0700` directory.
-- **Egress**: the only hosts ever contacted are `account.apple.com` and
-  `api-business.apple.com` / `api-school.apple.com`.
-- **Honest limits**: anything running as *your user* can read the key files
-  — the same trust model as `~/.ssh`. The API account can read inventory
-  and reassign devices between MDM services (the tool's only write);
-  revoke/rotate keys any time in Apple Business Manager.
+  they are validated and canonicalized at add time. **Mosyle credentials
+  (API access token, admin email + password, and the optional Logs Stream
+  token) are stored in plaintext in `~/.config/abapit/config.json` (`0600`)** —
+  Mosyle's API requires the password to mint its 24-hour bearer. Apple bearer
+  tokens are cached in `~/.config/abapit/tokens.json` (`0600`) so separate
+  processes share one token per hour. No secret is ever logged, echoed back
+  into a settings form, or placed in a URL.
+- **Data at rest**: the snapshot database (your full inventory) and the Mosyle
+  Logs Stream store are `0600` in `0700` directories.
+- **Egress**: the only hosts ever contacted are `account.apple.com`,
+  `api-business.apple.com` / `api-school.apple.com`, and — for a Mosyle org —
+  `businessapi.mosyle.com` plus `businessapilogs.mosyle.com`.
+- **Honest limits**: anything running as *your user* can read the config and
+  key files — the same trust model as `~/.ssh`; secrets are not in the
+  Keychain. The Apple API account can read inventory, reassign devices, and
+  (with a permitted role) manage blueprints; revoke/rotate keys any time in
+  Apple Business Manager, and rotate the Mosyle token/password in Mosyle.
 
 ## Notes & limits
 
-- **The only write is device↔MDM assignment**, and it never fires blind:
-  every run is planned first (unknown serials and no-ops are filtered out
-  and shown), the dry-run preview is the default everywhere, and execution
-  requires an explicit confirm (web) or `--yes` (CLI). Everything else is
-  read-only. Roadmap: blueprint/configuration CRUD.
+- **Writes never fire blind**: device↔MDM assignment and blueprint membership
+  changes are planned first (unknowns and no-ops are filtered out and shown),
+  the dry-run preview is the default everywhere, and execution requires an
+  explicit confirm (web) or `--yes` (CLI). The **Permissions** probe maps what
+  your API account's role actually allows and hides writes it can't do.
+  Mosyle is **read-only** — abapit never writes to your MDM. Roadmap:
+  configuration and MDM-server CRUD.
 - Responses are cached in memory for 5 minutes per org (the **Refresh**
   button clears it) to stay friendly with Apple's rate limits; 429s are
   retried automatically with backoff, honoring `Retry-After`.

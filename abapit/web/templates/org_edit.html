@@ -11,12 +11,14 @@
 
       {% if eorg.provider == 'mosyle' %}
       <label class="full">API access token
-        <input name="token" value="{{ eorg.mosyle_token }}" required>
+        <input name="token" type="password" autocomplete="off"
+               placeholder="{{ 'leave blank to keep current' if eorg.mosyle_token else 'access token' }}">
       </label>
       <label>Admin email <input name="email" type="email" value="{{ eorg.mosyle_email }}"></label>
-      <label>Admin password <input name="password" type="password" placeholder="leave blank to keep current"></label>
+      <label>Admin password <input name="password" type="password" autocomplete="off" placeholder="leave blank to keep current"></label>
       <label class="full">Logs Stream access token <span class="muted">(optional)</span>
-        <input name="logs_token" value="{{ eorg.mosyle_logs_token }}" placeholder="blank if unused">
+        <input name="logs_token" type="password" autocomplete="off"
+               placeholder="{{ 'leave blank to keep current' if eorg.mosyle_logs_token else 'blank if unused' }}">
       </label>
       {% else %}
       <label>Client ID <input name="client_id" value="{{ eorg.client_id }}" required></label>

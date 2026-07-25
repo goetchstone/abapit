@@ -214,15 +214,20 @@ def create_app(demo: bool = False,
     async def block_cross_origin_posts(request: Request, call_next):
         """Browsers happily fire cross-origin form POSTs at localhost.
         Reject mutations that arrive from another web origin (CSRF);
-        same-origin browser posts and non-browser clients are unaffected."""
+        same-origin browser posts and non-browser clients are unaffected.
+
+        Both checks compare the FULL origin (scheme + host + port), not just
+        the hostname: another app on a different loopback PORT is a different
+        origin, and browsers label such a request `same-site` (loopback hosts
+        have no registrable domain), so neither a localhost host allow-list nor
+        accepting `same-site` would be safe.
+        """
         if request.method == "POST":
             origin = request.headers.get("origin")
-            if origin:
-                origin_host = urlsplit(origin).hostname
-                if origin_host != request.url.hostname and origin_host not in LOCAL_HOSTS:
-                    return Response("Cross-origin POST blocked.", status_code=403)
+            if origin and origin != f"{request.url.scheme}://{request.url.netloc}":
+                return Response("Cross-origin POST blocked.", status_code=403)
             fetch_site = request.headers.get("sec-fetch-site")
-            if fetch_site and fetch_site not in ("same-origin", "same-site", "none"):
+            if fetch_site and fetch_site not in ("same-origin", "none"):
                 return Response("Cross-site request blocked.", status_code=403)
         return await call_next(request)
 
@@ -629,10 +634,13 @@ def create_app(demo: bool = False,
             return render(request, "mosyle_logs.html", active="mosyle_logs",
                           events=None, counts={}, non_compliant=0, type=type)
         # Logs Stream drains on read — drain (cache-throttled) and append to the
-        # per-org store, then display the accumulated history.
+        # per-org store, then display the accumulated history. The drain is
+        # destructive (Mosyle won't re-serve consumed events), so only do it for
+        # a genuine same-origin page view, never a cross-origin GET.
         def _drain_and_store(cc):
             return history.append_mosyle_logs(cc.org.client_id, cc.logs())
-        cached("mosyle_logs", _drain_and_store)
+        if request.headers.get("sec-fetch-site") in (None, "same-origin", "none"):
+            cached("mosyle_logs", _drain_and_store)
         all_events = history.load_mosyle_logs(c.org.client_id)
         counts: dict = {}
         for event in all_events:
@@ -1015,9 +1023,14 @@ def create_app(demo: bool = False,
     # ---- exports ----------------------------------------------------------
 
     @app.get("/export/{resource}.csv")
-    def export_csv(resource: str, live: int = 0, days: int = 90, years: int = 4,
-                   abm: str = "", mosyle: str = ""):
+    def export_csv(request: Request, resource: str, live: int = 0, days: int = 90,
+                   years: int = 4, abm: str = "", mosyle: str = ""):
         if resource == "applecare":
+            # ?live=1 costs one Apple call per device. A cross-origin <img>/GET
+            # must not be able to start that sweep; require a same-origin
+            # request (a real click from abapit's own pages).
+            if live and request.headers.get("sec-fetch-site") not in (None, "same-origin", "none"):
+                raise ApiError(403, "Live AppleCare export must be started from abapit itself.")
             return _applecare_csv(live=bool(live))
         if resource == "reconciliation":
             pair = _reconciliation_pair(config.load(), abm, mosyle)

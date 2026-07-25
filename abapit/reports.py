@@ -358,8 +358,8 @@ def _cell(value) -> str:
 
 def _csv_safe(value: str) -> str:
     """Neutralize spreadsheet formula injection: a cell starting with
-    = + - @ or a tab would execute as a formula when opened in Excel."""
-    if value and value[0] in "=+-@\t":
+    = + - @, tab, or CR would execute as a formula when opened in Excel."""
+    if value and value[0] in "=+-@\t\r":
         return "'" + value
     return value
 
@@ -368,6 +368,8 @@ def items_to_csv(items: list[dict]) -> str:
     header, rows = items_to_rows(items)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(header)
+    # Headers are attribute names from the API (Mosyle passes unmapped keys
+    # through), so they get the same treatment as data cells.
+    writer.writerow([_csv_safe(col) for col in header])
     writer.writerows([[_csv_safe(cell) for cell in row] for row in rows])
     return buf.getvalue()
