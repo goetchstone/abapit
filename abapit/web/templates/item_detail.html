@@ -4,6 +4,15 @@
 {% block title %}<a class="crumb" href="{{ back_href }}">{{ back_label }}</a> / {{ title }}{% endblock %}
 {% block content %}
 
+{# Optional write affordances — only for detail pages that pass them in, and
+   only when the active org's role allows that write. #}
+{% if edit_href and write_key and write_key in writable %}
+<div class="toolbar">
+  <a class="btn small" href="{{ edit_href }}">Edit</a>
+  {% if delete_href %}<a class="btn small danger" href="{{ delete_href }}">Delete…</a>{% endif %}
+</div>
+{% endif %}
+
 <div class="panels">
   <section class="panel">
     <h2>Details</h2>

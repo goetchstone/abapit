@@ -311,6 +311,34 @@ class DemoClient:
     def mdm_server_device_ids(self, server_id: str) -> list[str]:
         return self._assignments.get(server_id, [])
 
+    def create_mdm_server(self, attrs: dict) -> dict:
+        self._server_seq = getattr(self, "_server_seq", len(self._servers))
+        self._server_seq += 1
+        server_id = f"demo-server-{self._server_seq}"
+        now = _iso(datetime.now(timezone.utc))
+        item = {"type": "mdmServers", "id": server_id, "attributes": {
+            "serverName": attrs.get("serverName", "Untitled"),
+            "serverType": attrs.get("serverType", "MDM"),
+            "createdDateTime": now, "updatedDateTime": now}}
+        self._servers.append(item)
+        self._assignments[server_id] = []
+        return item
+
+    def update_mdm_server(self, server_id: str, attrs: dict) -> dict:
+        item = next((s for s in self._servers if s["id"] == server_id), None)
+        if item is None:
+            return {}
+        item["attributes"].update({k: v for k, v in attrs.items() if v is not None})
+        item["attributes"]["updatedDateTime"] = _iso(datetime.now(timezone.utc))
+        return item
+
+    def delete_mdm_server(self, server_id: str) -> None:
+        self._servers = [s for s in self._servers if s["id"] != server_id]
+        # Devices that were assigned to it become unassigned — mirroring the
+        # real consequence the confirm page warns about.
+        for serial in self._assignments.pop(server_id, []):
+            self._assigned_server_of.pop(serial, None)
+
     def mdm_enrolled_devices(self) -> list[dict]:
         return [{"type": "mdmDevices", "id": d["id"], "attributes": {
             "serialNumber": d["id"],
@@ -403,7 +431,10 @@ class DemoClient:
     def configuration(self, configuration_id: str) -> dict:
         config = next((c for c in self._configurations
                        if c["id"] == configuration_id), {})
-        if config:
+        # Apple only returns customSettingsValues on the detail call — mimic
+        # that for the seeded configs, but never clobber a payload that was
+        # actually created/edited through the write flow.
+        if config and config["attributes"].get("customSettingsValues") is None:
             config = {**config, "attributes": {
                 **config["attributes"],
                 "customSettingsValues": [{
@@ -413,6 +444,33 @@ class DemoClient:
                 }],
             }}
         return config
+
+    def create_configuration(self, attrs: dict) -> dict:
+        self._config_seq = getattr(self, "_config_seq", len(self._configurations))
+        self._config_seq += 1
+        cfg_id = f"demo-config-{self._config_seq}"
+        now = _iso(datetime.now(timezone.utc))
+        item = {"type": "configurations", "id": cfg_id, "attributes": {
+            "name": attrs.get("name", "Untitled"),
+            "type": attrs.get("type", "CUSTOM_SETTING"),
+            "configuredForPlatforms": attrs.get("configuredForPlatforms", []),
+            "customSettingsValues": attrs.get("customSettingsValues"),
+            "createdDateTime": now, "updatedDateTime": now}}
+        self._configurations.append(item)
+        return item
+
+    def update_configuration(self, configuration_id: str, attrs: dict) -> dict:
+        item = next((c for c in self._configurations
+                     if c["id"] == configuration_id), None)
+        if item is None:
+            return {}
+        item["attributes"].update({k: v for k, v in attrs.items() if v is not None})
+        item["attributes"]["updatedDateTime"] = _iso(datetime.now(timezone.utc))
+        return item
+
+    def delete_configuration(self, configuration_id: str) -> None:
+        self._configurations = [c for c in self._configurations
+                                if c["id"] != configuration_id]
 
     def mdm_enrolled_device(self, device_id: str) -> dict:
         return next((d for d in self.mdm_enrolled_devices()

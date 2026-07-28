@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% set editing = server is not none %}
+{% block titletag %}{{ 'Edit service' if editing else 'New service' }} · abapit{% endblock %}
+{% block title %}<a class="crumb" href="/mdm-servers">MDM Servers</a> /
+  {{ 'Edit ' ~ server.attributes.get('serverName', server.id) if editing else 'New service' }}{% endblock %}
+{% block content %}
+
+{% if error %}<div class="flash stale">{{ error }}</div>{% endif %}
+
+<div class="panels">
+  <section class="panel wide">
+    <h2>{{ 'Service details' if editing else 'Create a device management service' }}</h2>
+    <p class="muted">A device management service is the MDM that devices are
+    assigned to in Apple Business Manager. Devices are moved on the
+    <a href="/assign">Assign to MDM</a> page, not here.</p>
+    <form method="post"
+          action="{{ '/mdm-servers/' ~ server.id ~ '/edit' if editing else '/mdm-servers' }}"
+          class="form-grid">
+      <label class="full">Name
+        <input name="server_name" required autocomplete="off"
+               value="{{ server.attributes.get('serverName', '') if editing else '' }}">
+      </label>
+      <div class="full">
+        <button class="btn primary">{{ 'Save changes' if editing else 'Create service' }}</button>
+        <a class="btn ghost" href="{{ '/mdm-servers/' ~ server.id if editing else '/mdm-servers' }}">Cancel</a>
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}

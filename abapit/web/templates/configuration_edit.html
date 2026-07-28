@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% set editing = configuration is not none %}
+{% block titletag %}{{ 'Edit configuration' if editing else 'New configuration' }} · abapit{% endblock %}
+{% block title %}<a class="crumb" href="/configurations">Configurations</a> /
+  {{ 'Edit ' ~ attrs.get('name', '') if editing else 'New configuration' }}{% endblock %}
+{% block content %}
+
+{% if error %}<div class="flash stale">{{ error }}</div>{% endif %}
+
+<div class="panels">
+  <section class="panel wide">
+    <h2>{{ 'Configuration details' if editing else 'Create a configuration' }}</h2>
+    <p class="muted">Custom settings are delivered to devices through a blueprint.
+    The payload is the same JSON Apple returns for
+    <code>customSettingsValues</code> — it's validated before anything is sent.</p>
+
+    <form method="post"
+          action="{{ '/configurations/' ~ configuration.id ~ '/edit' if editing else '/configurations' }}"
+          class="form-grid">
+      <label class="full">Name
+        <input name="name" required autocomplete="off" value="{{ attrs.get('name', '') }}">
+      </label>
+
+      <div class="full">
+        <span class="muted">Platforms</span>
+        <div class="chips">
+          {% for p in platforms %}
+          <label class="chip"><input type="checkbox" name="platforms" value="{{ p }}"
+            {% if p in (attrs.get('configuredForPlatforms') or []) %}checked{% endif %}>
+            {{ p.replace('PLATFORM_', '') | title }}</label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <label class="full">Custom settings payload <span class="muted">(JSON — leave blank for none)</span>
+        <textarea name="payload" rows="12" spellcheck="false"
+                  placeholder='[{"payloadType": "com.apple.wifi.managed", "payloadContent": {"SSID_STR": "CorpNet"}}]'>{{ payload_text }}</textarea>
+      </label>
+
+      <div class="full">
+        <button class="btn primary">{{ 'Save changes' if editing else 'Create configuration' }}</button>
+        <a class="btn ghost" href="{{ '/configurations/' ~ configuration.id if editing else '/configurations' }}">Cancel</a>
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}

@@ -189,6 +189,15 @@ class ApiClient:
         linkages = self.list_all(f"mdmServers/{server_id}/relationships/devices")
         return [item.get("id", "") for item in linkages]
 
+    def create_mdm_server(self, attrs: dict) -> dict:
+        return self._create_resource("mdmServers", attrs)
+
+    def update_mdm_server(self, server_id: str, attrs: dict) -> dict:
+        return self._update_resource("mdmServers", server_id, attrs)
+
+    def delete_mdm_server(self, server_id: str) -> None:
+        self._delete_resource("mdmServers", server_id)
+
     def mdm_enrolled_devices(self) -> list[dict]:
         return self.list_all("mdmDevices")
 
@@ -418,6 +427,15 @@ class ApiClient:
         """Single configuration — the only place Apple returns
         customSettingsValues (it's null in the list response)."""
         return self.get(f"configurations/{configuration_id}").get("data", {})
+
+    def create_configuration(self, attrs: dict) -> dict:
+        return self._create_resource("configurations", attrs)
+
+    def update_configuration(self, configuration_id: str, attrs: dict) -> dict:
+        return self._update_resource("configurations", configuration_id, attrs)
+
+    def delete_configuration(self, configuration_id: str) -> None:
+        self._delete_resource("configurations", configuration_id)
 
     # -- audit (Business API only) ---------------------------------------------
 

@@ -4,6 +4,13 @@
 {% block title %}<a class="crumb" href="/mdm-servers">MDM Servers</a> / {{ server.attributes.get('serverName', server.id) }}{% endblock %}
 {% block content %}
 
+{% if 'mdm_servers_write' in writable %}
+<div class="toolbar">
+  <a class="btn small" href="/mdm-servers/{{ server_id }}/edit">Edit</a>
+  <a class="btn small danger" href="/mdm-servers/{{ server_id }}/delete">Delete…</a>
+</div>
+{% endif %}
+
 <div class="panels">
   <section class="panel">
     <h2>Service details</h2>

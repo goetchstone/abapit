@@ -74,6 +74,56 @@ def test_blueprint_create_edit_delete_flow():
     assert b"Kiosk Fleet v2" not in client.get("/blueprints").content
 
 
+def test_configuration_create_edit_delete_flow():
+    client = TestClient(create_app(demo=True), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    # invalid JSON is refused before anything is sent
+    bad = client.post("/configurations", data={"name": "X", "payload": "{nope"})
+    assert b"valid JSON" in bad.content
+
+    created = client.post("/configurations", data={
+        "name": "Corp VPN", "platforms": ["PLATFORM_MACOS"],
+        "payload": '[{"payloadType": "com.apple.vpn.managed"}]'})
+    assert created.status_code == 303
+    cid = created.headers["location"].split("?")[0].rsplit("/", 1)[-1]
+
+    detail = client.get(f"/configurations/{cid}")
+    assert b"com.apple.vpn.managed" in detail.content   # payload round-trips
+    assert b"Corp VPN" in client.get("/configurations").content
+
+    client.post(f"/configurations/{cid}/edit", data={
+        "name": "Corp VPN v2", "platforms": ["PLATFORM_MACOS", "PLATFORM_IOS"],
+        "payload": '[{"payloadType": "com.apple.vpn.managed"}]'})
+    assert b"Corp VPN v2" in client.get("/configurations").content
+
+    wrong = client.post(f"/configurations/{cid}/delete", data={"confirm": "nope"})
+    assert b"didn" in wrong.content
+    client.post(f"/configurations/{cid}/delete", data={"confirm": "Corp VPN v2"})
+    assert b"Corp VPN v2" not in client.get("/configurations").content
+
+
+def test_mdm_server_create_edit_delete_shows_blast_radius():
+    client = TestClient(create_app(demo=True), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    created = client.post("/mdm-servers", data={"server_name": "Jamf Test"})
+    assert created.status_code == 303
+    sid = created.headers["location"].split("?")[0].rsplit("/", 1)[-1]
+    assert b"Jamf Test" in client.get("/mdm-servers").content
+
+    client.post(f"/mdm-servers/{sid}/edit", data={"server_name": "Jamf Test v2"})
+    assert b"Jamf Test v2" in client.get("/mdm-servers").content
+
+    # a server WITH assigned devices must surface the enrollment warning
+    seeded = client.get("/mdm-servers/demo-server-0/delete")
+    assert b"Assigned devices" in seeded.content
+    assert b"enrollment" in seeded.content
+
+    wrong = client.post(f"/mdm-servers/{sid}/delete", data={"confirm": "nope"})
+    assert b"didn" in wrong.content
+    client.post(f"/mdm-servers/{sid}/delete", data={"confirm": "Jamf Test v2"})
+    assert b"Jamf Test v2" not in client.get("/mdm-servers").content
+
+
 def test_blueprint_writes_blocked_when_role_forbids(tmp_path, monkeypatch, ec_key_pair):
     """The template hides the buttons, but the POST itself must also refuse."""
     monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path / "cfg"))

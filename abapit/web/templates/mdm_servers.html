@@ -3,6 +3,10 @@
 {% block title %}Device Management Services{% endblock %}
 {% block content %}
 
+{% if 'mdm_servers_write' in writable %}
+<div class="toolbar"><a class="btn primary" href="/mdm-servers/new">New service</a></div>
+{% endif %}
+
 <table>
   <thead><tr><th>Name</th><th>Type</th><th>Created</th><th>Updated</th><th class="r">Devices</th></tr></thead>
   <tbody>
