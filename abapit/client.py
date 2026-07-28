@@ -351,6 +351,32 @@ class ApiClient:
         params = {"include": include} if include else None
         return self.get(f"blueprints/{blueprint_id}", params)
 
+    # -- generic JSON:API resource writes ------------------------------------
+    # Same shape for every writable v2.0+ resource (blueprints, configurations,
+    # mdmServers), so the per-resource methods stay one-liners.
+
+    def _create_resource(self, resource: str, attrs: dict) -> dict:
+        body = {"data": {"type": resource, "attributes": attrs}}
+        return self._request(f"{self.base_url}/v1/{resource}",
+                             method="POST", json_body=body).get("data", {})
+
+    def _update_resource(self, resource: str, item_id: str, attrs: dict) -> dict:
+        body = {"data": {"type": resource, "id": item_id, "attributes": attrs}}
+        return self._request(f"{self.base_url}/v1/{resource}/{item_id}",
+                             method="PATCH", json_body=body).get("data", {})
+
+    def _delete_resource(self, resource: str, item_id: str) -> None:
+        self._request(f"{self.base_url}/v1/{resource}/{item_id}", method="DELETE")
+
+    def create_blueprint(self, attrs: dict) -> dict:
+        return self._create_resource("blueprints", attrs)
+
+    def update_blueprint(self, blueprint_id: str, attrs: dict) -> dict:
+        return self._update_resource("blueprints", blueprint_id, attrs)
+
+    def delete_blueprint(self, blueprint_id: str) -> None:
+        self._delete_resource("blueprints", blueprint_id)
+
     # Blueprint relationship: UI key -> (URL segment, JSON:API resource type).
     # Segments/types confirmed against abapit's existing reads where possible
     # (orgDevices is the device type per create_device_activity); confirm the

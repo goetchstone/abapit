@@ -152,6 +152,30 @@ def test_blueprint_relationship_remove_uses_delete_and_orgdevices_type(org, fake
     assert captured["body"] == {"data": [{"type": "orgDevices", "id": "S1"}]}  # segment devices, type orgDevices
 
 
+def test_blueprint_crud_sends_correct_verbs_and_bodies(org, fake_tokens):
+    import json
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path,
+                     json.loads(request.content) if request.content else None))
+        return httpx.Response(200, json={"data": {"type": "blueprints", "id": "BP9"}})
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    client.create_blueprint({"name": "Kiosk"})
+    client.update_blueprint("BP9", {"name": "Kiosk 2"})
+    client.delete_blueprint("BP9")
+
+    method, path, body = seen[0]
+    assert method == "POST" and path.endswith("/v1/blueprints")
+    assert body == {"data": {"type": "blueprints", "attributes": {"name": "Kiosk"}}}
+    method, path, body = seen[1]
+    assert method == "PATCH" and path.endswith("/v1/blueprints/BP9")
+    assert body["data"]["id"] == "BP9"          # id required in a JSON:API update
+    method, path, _ = seen[2]
+    assert method == "DELETE" and path.endswith("/v1/blueprints/BP9")
+
+
 def test_write_probes_classify_forbidden_and_ok(org, fake_tokens):
     def handler(request):
         # blueprint-relationship write probe forbidden; the rest allowed (404)

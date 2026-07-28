@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block titletag %}{{ title }} · abapit{% endblock %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+
+{# Shared confirm interstitial for destructive writes. Server-rendered (not a
+   JS confirm) so the blast radius is visible, and irreversible actions require
+   typing the exact name — a mis-click can't destroy anything. #}
+<div class="panels">
+  <section class="panel wide">
+    <div class="flash stale">&#9888;&#65039; <strong>{{ warning }}</strong></div>
+
+    {% if radius %}
+    <h2>What this affects</h2>
+    <table>
+      <thead><tr><th>Attached</th><th class="r">Count</th></tr></thead>
+      <tbody>
+      {% for label, count in radius %}
+      <tr><td>{{ label }}</td><td class="r">{{ count }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Nothing is currently attached to it.</p>
+    {% endif %}
+
+    <form method="post" action="{{ action }}" class="spaced">
+      {% if confirm_word %}
+      <label class="full">Type <code>{{ confirm_word }}</code> to confirm
+        <input name="confirm" autocomplete="off" placeholder="{{ confirm_word }}" required>
+      </label>
+      {% endif %}
+      <div class="spaced">
+        <button class="btn danger">{{ submit_label }}</button>
+        <a class="btn ghost" href="{{ cancel_href }}">Cancel</a>
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}

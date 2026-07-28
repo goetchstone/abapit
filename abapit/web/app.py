@@ -697,6 +697,105 @@ def create_app(demo: bool = False,
         return render(request, "blueprints.html", active="blueprints",
                       blueprints=blueprints)
 
+    def _bust_blueprints():
+        org_key = client().org.client_id
+        app.state.cache = {k: v for k, v in app.state.cache.items()
+                           if not (k[0] == org_key and k[1] == "blueprints")}
+
+    def _require_write(key: str):
+        """Server-side check — the template also hides the forms, but a POST
+        must never depend on the UI having hidden a button."""
+        if not _is_writable(key):
+            raise ApiError(403, "This API account's role can't make that change "
+                                "(re-check Permissions in Settings if the role changed).")
+
+    # NOTE: must be registered before /blueprints/{blueprint_id} or "new" is
+    # matched as an id.
+    @app.get("/blueprints/new", response_class=HTMLResponse)
+    def blueprint_new_form(request: Request):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        return render(request, "blueprint_edit.html", active="blueprints",
+                      blueprint=None, error="")
+
+    @app.get("/blueprints/{blueprint_id}/edit", response_class=HTMLResponse)
+    def blueprint_edit_form(request: Request, blueprint_id: str):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        bp = client().blueprint(blueprint_id).get("data", {})
+        return render(request, "blueprint_edit.html", active="blueprints",
+                      blueprint=bp, error="")
+
+    @app.post("/blueprints", response_class=HTMLResponse)
+    def blueprint_create(request: Request, name: str = Form(""),
+                         description: str = Form("")):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        if not name.strip():
+            return render(request, "blueprint_edit.html", active="blueprints",
+                          blueprint=None, error="A blueprint needs a name.")
+        created = client().create_blueprint({"name": name.strip(),
+                                             "description": description.strip()})
+        _bust_blueprints()
+        msg = f"Created blueprint {name.strip()!r}."
+        return RedirectResponse(f"/blueprints/{created.get('id', '')}?msg={quote(msg)}",
+                                status_code=303)
+
+    @app.post("/blueprints/{blueprint_id}/edit", response_class=HTMLResponse)
+    def blueprint_update(request: Request, blueprint_id: str, name: str = Form(""),
+                         description: str = Form("")):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        if not name.strip():
+            bp = client().blueprint(blueprint_id).get("data", {})
+            return render(request, "blueprint_edit.html", active="blueprints",
+                          blueprint=bp, error="A blueprint needs a name.")
+        client().update_blueprint(blueprint_id, {"name": name.strip(),
+                                                 "description": description.strip()})
+        _bust_blueprints()
+        msg = "Blueprint updated."
+        return RedirectResponse(f"/blueprints/{blueprint_id}?msg={quote(msg)}",
+                                status_code=303)
+
+    @app.get("/blueprints/{blueprint_id}/delete", response_class=HTMLResponse)
+    def blueprint_delete_confirm(request: Request, blueprint_id: str):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        c = client()
+        bp = c.blueprint(blueprint_id).get("data", {})
+        name = bp.get("attributes", {}).get("name", blueprint_id)
+        # Blast radius: what this blueprint currently drives.
+        radius = []
+        for rel in BP_RELS:
+            try:
+                count = len(c.blueprint_relationship_ids(blueprint_id, rel))
+            except ApiError:
+                continue
+            if count:
+                radius.append((BP_REL_TITLES[rel], count))
+        return render(request, "confirm.html", active="blueprints",
+                      title=f"Delete blueprint “{name}”?",
+                      warning="Deleting a blueprint is permanent and stops it "
+                              "provisioning the devices and people below.",
+                      radius=radius, confirm_word=name,
+                      action=f"/blueprints/{blueprint_id}/delete",
+                      cancel_href=f"/blueprints/{blueprint_id}",
+                      submit_label="Delete blueprint")
+
+    @app.post("/blueprints/{blueprint_id}/delete")
+    def blueprint_delete(blueprint_id: str, confirm: str = Form("")):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        c = client()
+        bp = c.blueprint(blueprint_id).get("data", {})
+        name = bp.get("attributes", {}).get("name", blueprint_id)
+        if confirm.strip() != name:
+            raise ApiError(400, "The typed name didn't match — nothing was deleted.")
+        c.delete_blueprint(blueprint_id)
+        _bust_blueprints()
+        return RedirectResponse(f"/blueprints?msg={quote(f'Deleted blueprint {name!r}.')}",
+                                status_code=303)
+
     BP_RELS = ("apps", "configurations", "packages", "userGroups", "devices", "users")
     BP_REL_TITLES = {"apps": "Apps", "configurations": "Configurations",
                      "packages": "Packages", "userGroups": "User Groups",

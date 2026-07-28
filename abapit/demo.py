@@ -356,6 +356,36 @@ class DemoClient:
         data = next((b for b in self._blueprints if b["id"] == blueprint_id), {})
         return {"data": data, "included": self._blueprint_includes.get(blueprint_id, [])}
 
+    def create_blueprint(self, attrs: dict) -> dict:
+        self._blueprint_seq = getattr(self, "_blueprint_seq", len(self._blueprints))
+        self._blueprint_seq += 1
+        bp_id = f"demo-blueprint-{self._blueprint_seq}"
+        now = _iso(datetime.now(timezone.utc))
+        item = {"type": "blueprints", "id": bp_id, "attributes": {
+            "name": attrs.get("name", "Untitled"),
+            "description": attrs.get("description", ""),
+            "status": "ACTIVE", "appLicenseDeficient": False,
+            "createdDateTime": now, "updatedDateTime": now}}
+        self._blueprints.append(item)
+        self._blueprint_includes[bp_id] = []
+        self._blueprint_rel[bp_id] = {rel: set() for rel in
+                                      ("apps", "configurations", "packages",
+                                       "userGroups", "devices", "users")}
+        return item
+
+    def update_blueprint(self, blueprint_id: str, attrs: dict) -> dict:
+        item = next((b for b in self._blueprints if b["id"] == blueprint_id), None)
+        if item is None:
+            return {}
+        item["attributes"].update({k: v for k, v in attrs.items() if v is not None})
+        item["attributes"]["updatedDateTime"] = _iso(datetime.now(timezone.utc))
+        return item
+
+    def delete_blueprint(self, blueprint_id: str) -> None:
+        self._blueprints = [b for b in self._blueprints if b["id"] != blueprint_id]
+        self._blueprint_includes.pop(blueprint_id, None)
+        self._blueprint_rel.pop(blueprint_id, None)
+
     def blueprint_relationship_ids(self, blueprint_id: str, rel: str) -> list[str]:
         return sorted(self._blueprint_rel.get(blueprint_id, {}).get(rel, set()))
 

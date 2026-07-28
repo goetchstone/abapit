@@ -34,6 +34,13 @@
 </div>
 {% endif %}
 
+{% if 'blueprints_write' in writable %}
+<div class="toolbar">
+  <a class="btn small" href="/blueprints/{{ blueprint_id }}/edit">Edit</a>
+  <a class="btn small danger" href="/blueprints/{{ blueprint_id }}/delete">Delete…</a>
+</div>
+{% endif %}
+
 <div class="panels">
   <section class="panel">
     <h2>Blueprint details</h2>

@@ -47,6 +47,51 @@ def test_blueprint_relationship_execute_adds_then_removes():
     assert b"demo-user-0" not in client.get(f"/blueprints/{bp}").content
 
 
+def test_blueprint_create_edit_delete_flow():
+    client = TestClient(create_app(demo=True), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    # create
+    created = client.post("/blueprints", data={"name": "Kiosk Fleet",
+                                               "description": "front desk"})
+    assert created.status_code == 303
+    bp_id = created.headers["location"].split("?")[0].rsplit("/", 1)[-1]
+    assert b"Kiosk Fleet" in client.get("/blueprints").content
+
+    # a nameless create is rejected, not silently sent
+    assert b"needs a name" in client.post("/blueprints", data={"name": " "}).content
+
+    # edit
+    client.post(f"/blueprints/{bp_id}/edit", data={"name": "Kiosk Fleet v2",
+                                                   "description": "front desk"})
+    assert b"Kiosk Fleet v2" in client.get("/blueprints").content
+
+    # delete requires the exact typed name
+    wrong = client.post(f"/blueprints/{bp_id}/delete", data={"confirm": "nope"})
+    assert b"didn" in wrong.content                       # mismatch => refused
+    assert b"Kiosk Fleet v2" in client.get("/blueprints").content   # still there
+    gone = client.post(f"/blueprints/{bp_id}/delete", data={"confirm": "Kiosk Fleet v2"})
+    assert gone.status_code == 303
+    assert b"Kiosk Fleet v2" not in client.get("/blueprints").content
+
+
+def test_blueprint_writes_blocked_when_role_forbids(tmp_path, monkeypatch, ec_key_pair):
+    """The template hides the buttons, but the POST itself must also refuse."""
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("ABAPIT_DATA_DIR", str(tmp_path / "data"))
+    key_path, _ = ec_key_pair
+    slug = config.add_org(name="RO Org", scope="business", client_id="BUSINESSAPI.ro",
+                          key_id="k", private_key_path=str(key_path))
+    config.update_org_capabilities(slug, {"blueprints": "ok",
+                                          "blueprints_write": "forbidden"})
+    import abapit.web.app as app_mod
+    monkeypatch.setattr(app_mod, "build_client",
+                        lambda org: StubFleet([_device("AAA")], org=org))
+    client = TestClient(create_app(), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    assert b"role can" in client.post("/blueprints", data={"name": "X"}).content
+    assert b"role can" in client.get("/blueprints/new").content
+
+
 def test_org_units_list_and_detail_and_csv(web):
     listing = web.get("/org-units")
     assert listing.status_code == 200 and b"Headquarters" in listing.content
