@@ -2,8 +2,7 @@ import time
 
 import jwt
 
-from abapit.auth import (ASSERTION_AUDIENCE, ASSERTION_LIFETIME,
-                         build_client_assertion)
+from abapit.auth import ASSERTION_AUDIENCE, ASSERTION_LIFETIME, build_client_assertion
 
 
 def test_assertion_lifetime_under_apple_cap():

@@ -56,6 +56,7 @@ def _client(args):
 
 def cmd_serve(args) -> None:
     import uvicorn
+
     from .web.app import create_app
 
     # Host-header protection can only enumerate hosts we know. Binding wide
@@ -153,8 +154,8 @@ def cmd_assign(args) -> None:
     client = _client(args)
     serial_text = " ".join(args.serial)
     if args.file:
-        source = sys.stdin if args.file == "-" else open(args.file)
-        serial_text += " " + source.read()
+        serial_text += " " + (sys.stdin.read() if args.file == "-"
+                              else Path(args.file).read_text())
     if not serial_text.strip():
         sys.exit("No serials given — use --serial, or --file (use '-' for stdin).")
 

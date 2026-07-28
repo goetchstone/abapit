@@ -10,16 +10,15 @@ API, which currently covers devices and device management services.
 from __future__ import annotations
 
 import logging
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
 
-log = logging.getLogger("abapit")
-
 from .auth import token_cache
 from .config import Org
+
+log = logging.getLogger("abapit")
 
 BASE_URLS = {
     "business": "https://api-business.apple.com",

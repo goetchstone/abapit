@@ -143,7 +143,11 @@ def normalize_private_key(pem: str) -> str:
     Returns a canonical PKCS#8 PEM, or raises ValueError if unusable.
     """
     from cryptography.hazmat.primitives.serialization import (
-        Encoding, NoEncryption, PrivateFormat, load_pem_private_key)
+        Encoding,
+        NoEncryption,
+        PrivateFormat,
+        load_pem_private_key,
+    )
 
     text = pem.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
     candidates = [text]

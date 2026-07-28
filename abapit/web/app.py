@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import contextvars
 import logging
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -26,15 +25,24 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .. import __version__, config, history
 from ..assign import plan as plan_assignment
-from ..blueprint_plan import plan_relationship
 from ..auth import AuthError, token_cache
+from ..blueprint_plan import plan_relationship
 from ..client import ApiError, sections_for
 from ..demo import DemoClient
 from ..factory import build_client
-from ..reports import (assignment_summary, coverage_report, device_stats,
-                       device_timeline, fleet_age_report, items_to_csv,
-                       items_to_rows, mosyle_os_breakdown, mosyle_stale_devices,
-                       parse_iso, reconcile_enrollments)
+from ..reports import (
+    assignment_summary,
+    coverage_report,
+    device_stats,
+    device_timeline,
+    fleet_age_report,
+    items_to_csv,
+    items_to_rows,
+    mosyle_os_breakdown,
+    mosyle_stale_devices,
+    parse_iso,
+    reconcile_enrollments,
+)
 
 CACHE_TTL = 300  # seconds
 MAX_TABLE_ROWS = 500
