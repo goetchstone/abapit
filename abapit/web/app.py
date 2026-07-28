@@ -9,6 +9,7 @@ org so casual browsing doesn't hammer Apple's rate limits.
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import threading
 import time
@@ -890,6 +891,125 @@ def create_app(demo: bool = False,
         return render(request, "configurations.html", active="configurations",
                       configurations=configurations)
 
+    PLATFORMS = ("PLATFORM_MACOS", "PLATFORM_IOS", "PLATFORM_TVOS", "PLATFORM_VISIONOS")
+
+    def _bust_configurations(configuration_id: str = ""):
+        org_key = client().org.client_id
+        stale = {"configurations"}
+        if configuration_id:
+            stale.add(f"configuration:{configuration_id}")
+        app.state.cache = {k: v for k, v in app.state.cache.items()
+                           if not (k[0] == org_key and k[1] in stale)}
+
+    def _parse_payload(text: str):
+        """customSettingsValues must be valid JSON — validate here so a typo is
+        an error message, never a malformed PATCH to a real org."""
+        text = (text or "").strip()
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except ValueError as exc:
+            raise ValueError(f"Custom settings payload isn't valid JSON: {exc}") from exc
+
+    def _config_form(request: Request, item, error=""):
+        attrs = dict((item or {}).get("attributes", {}))
+        payload = attrs.get("customSettingsValues")
+        return render(request, "configuration_edit.html", active="configurations",
+                      configuration=item, attrs=attrs, platforms=PLATFORMS,
+                      payload_text=json.dumps(payload, indent=2) if payload else "",
+                      error=error)
+
+    # Registered before /configurations/{id} so "new" isn't matched as an id.
+    @app.get("/configurations/new", response_class=HTMLResponse)
+    def configuration_new_form(request: Request):
+        guard("configurations")
+        _require_write("configurations_write")
+        return _config_form(request, None)
+
+    @app.get("/configurations/{configuration_id}/edit", response_class=HTMLResponse)
+    def configuration_edit_form(request: Request, configuration_id: str):
+        guard("configurations")
+        _require_write("configurations_write")
+        return _config_form(request, client().configuration(configuration_id))
+
+    @app.post("/configurations", response_class=HTMLResponse)
+    def configuration_create(request: Request, name: str = Form(""),
+                             platforms: list[str] = Form(default=[]),
+                             payload: str = Form("")):
+        guard("configurations")
+        _require_write("configurations_write")
+        try:
+            values = _parse_payload(payload)
+        except ValueError as exc:
+            return _config_form(request, None, error=str(exc))
+        if not name.strip():
+            return _config_form(request, None, error="A configuration needs a name.")
+        created = client().create_configuration({
+            "name": name.strip(), "type": "CUSTOM_SETTING",
+            "configuredForPlatforms": [p for p in platforms if p in PLATFORMS],
+            "customSettingsValues": values})
+        _bust_configurations()
+        msg = f"Created configuration {name.strip()!r}."
+        return RedirectResponse(
+            f"/configurations/{created.get('id', '')}?msg={quote(msg)}", status_code=303)
+
+    @app.post("/configurations/{configuration_id}/edit", response_class=HTMLResponse)
+    def configuration_update(request: Request, configuration_id: str,
+                             name: str = Form(""),
+                             platforms: list[str] = Form(default=[]),
+                             payload: str = Form("")):
+        guard("configurations")
+        _require_write("configurations_write")
+        c = client()
+        try:
+            values = _parse_payload(payload)
+        except ValueError as exc:
+            return _config_form(request, c.configuration(configuration_id), error=str(exc))
+        if not name.strip():
+            return _config_form(request, c.configuration(configuration_id),
+                                error="A configuration needs a name.")
+        c.update_configuration(configuration_id, {
+            "name": name.strip(),
+            "configuredForPlatforms": [p for p in platforms if p in PLATFORMS],
+            "customSettingsValues": values})
+        _bust_configurations(configuration_id)
+        return RedirectResponse(
+            f"/configurations/{configuration_id}?msg={quote('Configuration updated.')}",
+            status_code=303)
+
+    @app.get("/configurations/{configuration_id}/delete", response_class=HTMLResponse)
+    def configuration_delete_confirm(request: Request, configuration_id: str):
+        guard("configurations")
+        _require_write("configurations_write")
+        item = client().configuration(configuration_id)
+        attrs = item.get("attributes", {})
+        name = attrs.get("name", configuration_id)
+        radius = [("Platforms", len(attrs.get("configuredForPlatforms") or []))]
+        return render(request, "confirm.html", active="configurations",
+                      title=f"Delete configuration “{name}”?",
+                      warning="Deleting a configuration is permanent. Any blueprint "
+                              "using it stops delivering these settings.",
+                      radius=[r for r in radius if r[1]], confirm_word=name,
+                      action=f"/configurations/{configuration_id}/delete",
+                      cancel_href=f"/configurations/{configuration_id}",
+                      submit_label="Delete configuration")
+
+    @app.post("/configurations/{configuration_id}/delete")
+    def configuration_delete(configuration_id: str, confirm: str = Form("")):
+        guard("configurations")
+        _require_write("configurations_write")
+        c = client()
+        name = c.configuration(configuration_id).get("attributes", {}).get(
+            "name", configuration_id)
+        if confirm.strip() != name:
+            raise ApiError(400, "The typed name didn't match — nothing was deleted.")
+        c.delete_configuration(configuration_id)
+        _bust_configurations(configuration_id)
+        return RedirectResponse(
+            f"/configurations?msg={quote(f'Deleted configuration {name!r}.')}",
+            status_code=303)
+
     @app.get("/configurations/{configuration_id}", response_class=HTMLResponse)
     def configuration_page(request: Request, configuration_id: str):
         guard("configurations")
@@ -897,12 +1017,14 @@ def create_app(demo: bool = False,
                       lambda c: c.configuration(configuration_id))
         attrs = dict(item.get("attributes", {}))
         payload = attrs.pop("customSettingsValues", None)
-        import json as _json
         return render(request, "item_detail.html", active="configurations",
                       title=attrs.get("name", configuration_id),
                       back_href="/configurations", back_label="Configurations",
-                      plain_attrs=attrs,
-                      payload=_json.dumps(payload, indent=2) if payload else "",
+                      plain_attrs=attrs, item_id=configuration_id,
+                      edit_href=f"/configurations/{configuration_id}/edit",
+                      delete_href=f"/configurations/{configuration_id}/delete",
+                      write_key="configurations_write",
+                      payload=json.dumps(payload, indent=2) if payload else "",
                       payload_label="Custom settings payload")
 
     @app.get("/mdm-enrolled/{device_id}", response_class=HTMLResponse)

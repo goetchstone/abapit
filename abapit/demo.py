@@ -403,7 +403,10 @@ class DemoClient:
     def configuration(self, configuration_id: str) -> dict:
         config = next((c for c in self._configurations
                        if c["id"] == configuration_id), {})
-        if config:
+        # Apple only returns customSettingsValues on the detail call — mimic
+        # that for the seeded configs, but never clobber a payload that was
+        # actually created/edited through the write flow.
+        if config and config["attributes"].get("customSettingsValues") is None:
             config = {**config, "attributes": {
                 **config["attributes"],
                 "customSettingsValues": [{
@@ -413,6 +416,33 @@ class DemoClient:
                 }],
             }}
         return config
+
+    def create_configuration(self, attrs: dict) -> dict:
+        self._config_seq = getattr(self, "_config_seq", len(self._configurations))
+        self._config_seq += 1
+        cfg_id = f"demo-config-{self._config_seq}"
+        now = _iso(datetime.now(timezone.utc))
+        item = {"type": "configurations", "id": cfg_id, "attributes": {
+            "name": attrs.get("name", "Untitled"),
+            "type": attrs.get("type", "CUSTOM_SETTING"),
+            "configuredForPlatforms": attrs.get("configuredForPlatforms", []),
+            "customSettingsValues": attrs.get("customSettingsValues"),
+            "createdDateTime": now, "updatedDateTime": now}}
+        self._configurations.append(item)
+        return item
+
+    def update_configuration(self, configuration_id: str, attrs: dict) -> dict:
+        item = next((c for c in self._configurations
+                     if c["id"] == configuration_id), None)
+        if item is None:
+            return {}
+        item["attributes"].update({k: v for k, v in attrs.items() if v is not None})
+        item["attributes"]["updatedDateTime"] = _iso(datetime.now(timezone.utc))
+        return item
+
+    def delete_configuration(self, configuration_id: str) -> None:
+        self._configurations = [c for c in self._configurations
+                                if c["id"] != configuration_id]
 
     def mdm_enrolled_device(self, device_id: str) -> dict:
         return next((d for d in self.mdm_enrolled_devices()

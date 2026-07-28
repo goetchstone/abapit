@@ -3,6 +3,10 @@
 {% block title %}Configurations{% endblock %}
 {% block content %}
 
+{% if 'configurations_write' in writable %}
+<div class="toolbar"><a class="btn primary" href="/configurations/new">New configuration</a></div>
+{% endif %}
+
 <table>
   <thead><tr><th>Name</th><th>Type</th><th>Platforms</th><th>Created</th><th>Updated</th></tr></thead>
   <tbody>

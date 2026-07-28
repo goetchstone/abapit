@@ -419,6 +419,15 @@ class ApiClient:
         customSettingsValues (it's null in the list response)."""
         return self.get(f"configurations/{configuration_id}").get("data", {})
 
+    def create_configuration(self, attrs: dict) -> dict:
+        return self._create_resource("configurations", attrs)
+
+    def update_configuration(self, configuration_id: str, attrs: dict) -> dict:
+        return self._update_resource("configurations", configuration_id, attrs)
+
+    def delete_configuration(self, configuration_id: str) -> None:
+        self._delete_resource("configurations", configuration_id)
+
     # -- audit (Business API only) ---------------------------------------------
 
     def audit_events(self, start_iso: str, end_iso: str, event_type: str = "") -> list[dict]:

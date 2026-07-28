@@ -74,6 +74,34 @@ def test_blueprint_create_edit_delete_flow():
     assert b"Kiosk Fleet v2" not in client.get("/blueprints").content
 
 
+def test_configuration_create_edit_delete_flow():
+    client = TestClient(create_app(demo=True), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    # invalid JSON is refused before anything is sent
+    bad = client.post("/configurations", data={"name": "X", "payload": "{nope"})
+    assert b"valid JSON" in bad.content
+
+    created = client.post("/configurations", data={
+        "name": "Corp VPN", "platforms": ["PLATFORM_MACOS"],
+        "payload": '[{"payloadType": "com.apple.vpn.managed"}]'})
+    assert created.status_code == 303
+    cid = created.headers["location"].split("?")[0].rsplit("/", 1)[-1]
+
+    detail = client.get(f"/configurations/{cid}")
+    assert b"com.apple.vpn.managed" in detail.content   # payload round-trips
+    assert b"Corp VPN" in client.get("/configurations").content
+
+    client.post(f"/configurations/{cid}/edit", data={
+        "name": "Corp VPN v2", "platforms": ["PLATFORM_MACOS", "PLATFORM_IOS"],
+        "payload": '[{"payloadType": "com.apple.vpn.managed"}]'})
+    assert b"Corp VPN v2" in client.get("/configurations").content
+
+    wrong = client.post(f"/configurations/{cid}/delete", data={"confirm": "nope"})
+    assert b"didn" in wrong.content
+    client.post(f"/configurations/{cid}/delete", data={"confirm": "Corp VPN v2"})
+    assert b"Corp VPN v2" not in client.get("/configurations").content
+
+
 def test_blueprint_writes_blocked_when_role_forbids(tmp_path, monkeypatch, ec_key_pair):
     """The template hides the buttons, but the POST itself must also refuse."""
     monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path / "cfg"))
