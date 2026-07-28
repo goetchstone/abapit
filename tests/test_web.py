@@ -102,6 +102,28 @@ def test_configuration_create_edit_delete_flow():
     assert b"Corp VPN v2" not in client.get("/configurations").content
 
 
+def test_mdm_server_create_edit_delete_shows_blast_radius():
+    client = TestClient(create_app(demo=True), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    created = client.post("/mdm-servers", data={"server_name": "Jamf Test"})
+    assert created.status_code == 303
+    sid = created.headers["location"].split("?")[0].rsplit("/", 1)[-1]
+    assert b"Jamf Test" in client.get("/mdm-servers").content
+
+    client.post(f"/mdm-servers/{sid}/edit", data={"server_name": "Jamf Test v2"})
+    assert b"Jamf Test v2" in client.get("/mdm-servers").content
+
+    # a server WITH assigned devices must surface the enrollment warning
+    seeded = client.get("/mdm-servers/demo-server-0/delete")
+    assert b"Assigned devices" in seeded.content
+    assert b"enrollment" in seeded.content
+
+    wrong = client.post(f"/mdm-servers/{sid}/delete", data={"confirm": "nope"})
+    assert b"didn" in wrong.content
+    client.post(f"/mdm-servers/{sid}/delete", data={"confirm": "Jamf Test v2"})
+    assert b"Jamf Test v2" not in client.get("/mdm-servers").content
+
+
 def test_blueprint_writes_blocked_when_role_forbids(tmp_path, monkeypatch, ec_key_pair):
     """The template hides the buttons, but the POST itself must also refuse."""
     monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path / "cfg"))

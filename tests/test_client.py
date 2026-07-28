@@ -176,6 +176,29 @@ def test_blueprint_crud_sends_correct_verbs_and_bodies(org, fake_tokens):
     assert method == "DELETE" and path.endswith("/v1/blueprints/BP9")
 
 
+def test_configuration_and_mdm_server_writes_use_right_resources(org, fake_tokens):
+    import json
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path,
+                     json.loads(request.content) if request.content else None))
+        return httpx.Response(200, json={"data": {"id": "X"}})
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    client.create_configuration({"name": "VPN", "type": "CUSTOM_SETTING"})
+    client.delete_configuration("C1")
+    client.create_mdm_server({"serverName": "Jamf"})
+    client.update_mdm_server("S1", {"serverName": "Jamf 2"})
+
+    assert seen[0][0] == "POST" and seen[0][1].endswith("/v1/configurations")
+    assert seen[0][2]["data"]["type"] == "configurations"
+    assert seen[1][0] == "DELETE" and seen[1][1].endswith("/v1/configurations/C1")
+    assert seen[2][0] == "POST" and seen[2][1].endswith("/v1/mdmServers")
+    assert seen[2][2]["data"]["type"] == "mdmServers"
+    assert seen[3][0] == "PATCH" and seen[3][1].endswith("/v1/mdmServers/S1")
+
+
 def test_write_probes_classify_forbidden_and_ok(org, fake_tokens):
     def handler(request):
         # blueprint-relationship write probe forbidden; the rest allowed (404)

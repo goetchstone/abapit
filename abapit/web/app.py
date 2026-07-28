@@ -566,13 +566,96 @@ def create_app(demo: bool = False,
         return render(request, "mdm_servers.html", active="mdm_servers",
                       servers=servers, counts=counts)
 
+    def _bust_mdm_servers():
+        """MDM-server changes also invalidate the assignment map that feeds the
+        dashboard's per-server counts."""
+        org_key = client().org.client_id
+        app.state.cache = {k: v for k, v in app.state.cache.items()
+                           if not (k[0] == org_key
+                                   and k[1] in ("mdm_servers", "server_device_ids"))}
+
+    # Registered before /mdm-servers/{server_id} so "new" isn't matched as an id.
+    @app.get("/mdm-servers/new", response_class=HTMLResponse)
+    def mdm_server_new_form(request: Request):
+        guard("mdm_servers")
+        _require_write("mdm_servers_write")
+        return render(request, "mdm_server_edit.html", active="mdm_servers",
+                      server=None, error="")
+
+    @app.get("/mdm-servers/{server_id}/edit", response_class=HTMLResponse)
+    def mdm_server_edit_form(request: Request, server_id: str):
+        guard("mdm_servers")
+        _require_write("mdm_servers_write")
+        return render(request, "mdm_server_edit.html", active="mdm_servers",
+                      server=client().mdm_server(server_id), error="")
+
+    @app.post("/mdm-servers", response_class=HTMLResponse)
+    def mdm_server_create(request: Request, server_name: str = Form("")):
+        guard("mdm_servers")
+        _require_write("mdm_servers_write")
+        if not server_name.strip():
+            return render(request, "mdm_server_edit.html", active="mdm_servers",
+                          server=None, error="A device management service needs a name.")
+        created = client().create_mdm_server({"serverName": server_name.strip()})
+        _bust_mdm_servers()
+        msg = f"Created device management service {server_name.strip()!r}."
+        return RedirectResponse(f"/mdm-servers/{created.get('id', '')}?msg={quote(msg)}",
+                                status_code=303)
+
+    @app.post("/mdm-servers/{server_id}/edit", response_class=HTMLResponse)
+    def mdm_server_update(request: Request, server_id: str, server_name: str = Form("")):
+        guard("mdm_servers")
+        _require_write("mdm_servers_write")
+        if not server_name.strip():
+            return render(request, "mdm_server_edit.html", active="mdm_servers",
+                          server=client().mdm_server(server_id),
+                          error="A device management service needs a name.")
+        client().update_mdm_server(server_id, {"serverName": server_name.strip()})
+        _bust_mdm_servers()
+        return RedirectResponse(f"/mdm-servers/{server_id}?msg={quote('Service updated.')}",
+                                status_code=303)
+
+    @app.get("/mdm-servers/{server_id}/delete", response_class=HTMLResponse)
+    def mdm_server_delete_confirm(request: Request, server_id: str):
+        guard("mdm_servers")
+        _require_write("mdm_servers_write")
+        c = client()
+        server = c.mdm_server(server_id)
+        name = server.get("attributes", {}).get("serverName", server_id)
+        assigned = len(c.mdm_server_device_ids(server_id))
+        return render(request, "confirm.html", active="mdm_servers",
+                      title=f"Delete device management service “{name}”?",
+                      warning=("Deleting a device management service is permanent. "
+                               f"{assigned} device(s) are assigned to it and will be "
+                               "left unassigned — this changes their enrollment."
+                               if assigned else
+                               "Deleting a device management service is permanent."),
+                      radius=[("Assigned devices", assigned)] if assigned else [],
+                      confirm_word=name,
+                      action=f"/mdm-servers/{server_id}/delete",
+                      cancel_href=f"/mdm-servers/{server_id}",
+                      submit_label="Delete service")
+
+    @app.post("/mdm-servers/{server_id}/delete")
+    def mdm_server_delete(server_id: str, confirm: str = Form("")):
+        guard("mdm_servers")
+        _require_write("mdm_servers_write")
+        c = client()
+        name = c.mdm_server(server_id).get("attributes", {}).get("serverName", server_id)
+        if confirm.strip() != name:
+            raise ApiError(400, "The typed name didn't match — nothing was deleted.")
+        c.delete_mdm_server(server_id)
+        _bust_mdm_servers()
+        return RedirectResponse(
+            f"/mdm-servers?msg={quote(f'Deleted service {name!r}.')}", status_code=303)
+
     @app.get("/mdm-servers/{server_id}", response_class=HTMLResponse)
     def mdm_server_page(request: Request, server_id: str):
         c = client()
         server = c.mdm_server(server_id)
         serials = c.mdm_server_device_ids(server_id)
         return render(request, "mdm_server_detail.html", active="mdm_servers",
-                      server=server, serials=serials)
+                      server=server, serials=serials, server_id=server_id)
 
     @app.get("/mdm-enrolled", response_class=HTMLResponse)
     def mdm_enrolled_page(request: Request, q: str = ""):
