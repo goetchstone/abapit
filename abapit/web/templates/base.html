@@ -16,7 +16,7 @@
       {% if demo %}
         <strong>Demo Org</strong><span class="badge demo">demo data</span>
       {% elif org %}
-        <strong>{{ org.name }}</strong><span class="badge">{{ org.scope }}</span>
+        <strong>{{ org.name }}</strong><span class="badge">{{ 'Mosyle' if org.provider == 'mosyle' else org.scope }}</span>
       {% else %}
         <strong>No org configured</strong>
       {% endif %}

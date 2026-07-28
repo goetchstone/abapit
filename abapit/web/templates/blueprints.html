@@ -3,6 +3,10 @@
 {% block title %}Blueprints{% endblock %}
 {% block content %}
 
+{% if 'blueprints_write' in writable %}
+<div class="toolbar"><a class="btn primary" href="/blueprints/new">New blueprint</a></div>
+{% endif %}
+
 <table>
   <thead><tr><th>Name</th><th>Description</th><th>Status</th><th>App licenses</th><th>Updated</th></tr></thead>
   <tbody>

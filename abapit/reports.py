@@ -12,9 +12,14 @@ def parse_iso(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    # Mosyle can return a naive date/datetime string; treat it as UTC so
+    # arithmetic against tz-aware "now" (in fmt_ago, the reports) never throws.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def device_stats(devices: list[dict]) -> dict:
@@ -164,6 +169,169 @@ def fleet_age_report(devices: list[dict], applecare_items: list[dict] | None,
     }
 
 
+def _norm_serial(serial: str | None) -> str:
+    """ABM serials are uppercase; Mosyle casing varies. Normalize for joins
+    while callers keep the original for display."""
+    return (serial or "").strip().upper()
+
+
+def reconcile_enrollments(abm_devices: list[dict],
+                          mosyle_devices: list[dict]) -> dict:
+    """Join an Apple Business org's devices against a Mosyle org's by serial.
+
+    Surfaces the gap neither tool shows alone: devices owned in ABM but not
+    enrolled in this Mosyle tenant, devices enrolled in Mosyle but unknown to
+    ABM, and devices present in both. For `both`, ownership fields come from
+    ABM (source of truth for procurement) and live-posture fields from Mosyle.
+    """
+    abm_by: dict[str, dict] = {}
+    for device in abm_devices:
+        key = _norm_serial(device.get("id"))
+        if key:
+            abm_by[key] = device
+    mosyle_by: dict[str, dict] = {}
+    for device in mosyle_devices:
+        key = _norm_serial(device.get("id"))
+        if key:
+            mosyle_by[key] = device
+
+    def abm_row(device: dict) -> dict:
+        attrs = device.get("attributes", {})
+        return {"serial": device.get("id", ""), "presence": "abm_only",
+                "abm_status": attrs.get("status", ""), "mosyle_status": "",
+                "productFamily": attrs.get("productFamily", ""),
+                "deviceModel": attrs.get("deviceModel", ""),
+                "osVersion": "", "lastCheckIn": "",
+                "addedToOrgDateTime": attrs.get("addedToOrgDateTime", ""),
+                "currentUser": ""}
+
+    def mosyle_row(device: dict) -> dict:
+        attrs = device.get("attributes", {})
+        return {"serial": device.get("id", ""), "presence": "mosyle_only",
+                "abm_status": "", "mosyle_status": attrs.get("status", ""),
+                "productFamily": attrs.get("productFamily", ""),
+                "deviceModel": attrs.get("deviceModel", ""),
+                "osVersion": attrs.get("osVersion", ""),
+                "lastCheckIn": attrs.get("lastCheckIn", ""),
+                "addedToOrgDateTime": "",
+                "currentUser": attrs.get("currentUser", "")}
+
+    def both_row(key: str) -> dict:
+        abm = abm_by[key].get("attributes", {})
+        mosyle = mosyle_by[key].get("attributes", {})
+        return {"serial": abm_by[key].get("id", ""), "presence": "both",
+                "abm_status": abm.get("status", ""),
+                "mosyle_status": mosyle.get("status", ""),
+                "productFamily": abm.get("productFamily") or mosyle.get("productFamily", ""),
+                "deviceModel": abm.get("deviceModel") or mosyle.get("deviceModel", ""),
+                "osVersion": mosyle.get("osVersion", ""),
+                "lastCheckIn": mosyle.get("lastCheckIn", ""),
+                "addedToOrgDateTime": abm.get("addedToOrgDateTime", ""),
+                "currentUser": mosyle.get("currentUser", "")}
+
+    abm_keys, mosyle_keys = set(abm_by), set(mosyle_by)
+    both_keys = abm_keys & mosyle_keys
+    abm_only = sorted((abm_row(abm_by[k]) for k in abm_keys - mosyle_keys),
+                      key=lambda r: r["serial"])
+    mosyle_only = sorted((mosyle_row(mosyle_by[k]) for k in mosyle_keys - abm_keys),
+                         key=lambda r: r["serial"])
+    both = sorted((both_row(k) for k in both_keys), key=lambda r: r["serial"])
+    total_unique = len(abm_keys | mosyle_keys)
+    summary = {
+        "total_abm": len(abm_keys), "total_mosyle": len(mosyle_keys),
+        "total_unique": total_unique, "both_count": len(both_keys),
+        "abm_only_count": len(abm_only), "mosyle_only_count": len(mosyle_only),
+        "enrollment_rate": round(len(both_keys) / total_unique * 100, 1)
+                           if total_unique else 0.0,
+    }
+    return {"abm_only": abm_only, "mosyle_only": mosyle_only,
+            "both": both, "summary": summary}
+
+
+def device_timeline(abm_attrs: dict | None, mosyle_attrs: dict | None,
+                    audit_events: list[dict] | None = None) -> list[dict]:
+    """Digest one device's signals from both sources into a single reverse-
+    chronological activity list — the per-device 'what happened' view neither
+    ABM nor Mosyle gives alone. Each item: {when, kind, label, source}."""
+    abm = abm_attrs or {}
+    mosyle = mosyle_attrs or {}
+    items: list[dict] = []
+
+    def add(when, kind, label, source):
+        if when:
+            items.append({"when": when, "kind": kind, "label": label, "source": source})
+
+    add(abm.get("orderDateTime"), "ordered", "Ordered", "ABM")
+    add(abm.get("addedToOrgDateTime"), "added", "Added to Apple Business Manager", "ABM")
+    for event in (audit_events or []):
+        attrs = event.get("attributes", {})
+        label = attrs.get("type", "event").replace("_", " ").title()
+        outcome = attrs.get("outcome", "")
+        add(attrs.get("eventDateTime"), "audit",
+            f"{label} · {outcome}".strip(" ·") if outcome else label, "ABM")
+
+    add(mosyle.get("enrolledAt"), "enrolled", "Enrolled in Mosyle", "Mosyle")
+    add(mosyle.get("lastMdmCheckIn"), "checkin", "MDM check-in", "Mosyle")
+    add(mosyle.get("lastPush"), "push", "Last MDM push", "Mosyle")
+    add(mosyle.get("lastCheckIn"), "beat", "Last seen (heartbeat)", "Mosyle")
+
+    items.sort(key=lambda i: i["when"], reverse=True)
+    return items
+
+
+def mosyle_os_breakdown(devices: list[dict]) -> dict:
+    """OS-version distribution across a Mosyle fleet — patch posture ABM
+    can't see. Missing versions bucket as 'Unknown', sorted last."""
+    counts: Counter = Counter()
+    for device in devices:
+        counts[device.get("attributes", {}).get("osVersion") or "Unknown"] += 1
+    total = sum(counts.values())
+    rows = sorted(counts.items(),
+                  key=lambda vc: (vc[0] == "Unknown", -vc[1], vc[0]))
+    return {
+        "rows": [(version, count, round(count / total * 100, 1) if total else 0.0)
+                 for version, count in rows],
+        "total": total,
+        "max_count": max(counts.values(), default=0),
+    }
+
+
+def mosyle_stale_devices(devices: list[dict], days: int = 30,
+                         now: datetime | None = None) -> dict:
+    """Mosyle devices that haven't checked in within `days` (or never have).
+
+    A device assigned in ABM but silent in Mosyle is the strongest 'is this
+    actually managed?' signal. lastCheckIn is already ISO (adapt_device
+    converts Mosyle's epoch); a missing/unparseable one counts as never
+    checked in and sorts as the stalest.
+    """
+    now = now or datetime.now(timezone.utc)
+    rows, never = [], 0
+    for device in devices:
+        attrs = device.get("attributes", {})
+        checkin = parse_iso(attrs.get("lastCheckIn"))
+        if checkin is None:
+            days_stale, include = None, True
+            never += 1
+        else:
+            days_stale = (now - checkin).days
+            include = days_stale >= days
+        if include:
+            rows.append({
+                "serial": device.get("id", ""),
+                "deviceModel": attrs.get("deviceModel", ""),
+                "productFamily": attrs.get("productFamily", ""),
+                "osVersion": attrs.get("osVersion", ""),
+                "lastCheckIn": attrs.get("lastCheckIn", ""),
+                "currentUser": attrs.get("currentUser", ""),
+                "days_stale": days_stale,
+            })
+    # Never-checked-in first, then by days stale descending.
+    rows.sort(key=lambda r: (r["days_stale"] is not None, -(r["days_stale"] or 0)))
+    return {"rows": rows, "total": len(devices), "stale_count": len(rows),
+            "never_count": never, "days": days}
+
+
 def items_to_rows(items: list[dict]) -> tuple[list[str], list[list]]:
     """Flatten JSON:API items to (header, rows). `id` first, then the union
     of attribute keys in first-seen order."""
@@ -190,8 +358,8 @@ def _cell(value) -> str:
 
 def _csv_safe(value: str) -> str:
     """Neutralize spreadsheet formula injection: a cell starting with
-    = + - @ or a tab would execute as a formula when opened in Excel."""
-    if value and value[0] in "=+-@\t":
+    = + - @, tab, or CR would execute as a formula when opened in Excel."""
+    if value and value[0] in "=+-@\t\r":
         return "'" + value
     return value
 
@@ -200,6 +368,8 @@ def items_to_csv(items: list[dict]) -> str:
     header, rows = items_to_rows(items)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(header)
+    # Headers are attribute names from the API (Mosyle passes unmapped keys
+    # through), so they get the same treatment as data cells.
+    writer.writerow([_csv_safe(col) for col in header])
     writer.writerows([[_csv_safe(cell) for cell in row] for row in rows])
     return buf.getvalue()

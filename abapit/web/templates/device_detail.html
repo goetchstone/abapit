@@ -1,28 +1,112 @@
 {% extends "base.html" %}
 {% from "_macros.html" import attr_table %}
-{% block titletag %}{{ device.id }} · abapit{% endblock %}
-{% block title %}<a class="crumb" href="/devices">Devices</a> / {{ device.id }}{% endblock %}
+{% block titletag %}{{ device_id }} · abapit{% endblock %}
+{% block title %}<a class="crumb" href="/devices">Devices</a> / {{ device_id }}{% endblock %}
+{% block head %}
+<style>
+.device-head{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.device-head h2{margin:0}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:400;font-size:.8em}
+table.kv{width:100%;border-collapse:collapse}
+table.kv td{padding:5px 0;font-size:14px;vertical-align:top;border-bottom:1px solid var(--border)}
+table.kv td:first-child{color:var(--muted);width:48%}
+table.kv td:last-child{text-align:right}
+.device-head .mono{color:var(--muted)}
+</style>
+{% endblock %}
 {% block content %}
 
+{% set adev = abm.device if abm else none %}
+{% set aattr = adev.attributes if adev else none %}
+{% set mattr = mosyle.attributes if mosyle else none %}
+
+<div class="device-head">
+  <h2>{{ (aattr.deviceModel if aattr else none) or (mattr.deviceModel if mattr else none) or 'Device' }}
+    <span class="muted mono">{{ device_id }}</span></h2>
+  {% if aattr and mattr %}<span class="pill success">Owned &amp; managed</span>
+  {% elif mattr %}<span class="pill success">Managed in Mosyle</span>
+  {% else %}<span class="pill">In Apple Business Manager</span>{% endif %}
+</div>
+
+{% if mattr %}
+<div class="cards">
+  <div class="card"><div class="num">{{ mattr.lastCheckIn | ago }}</div><div class="label">Last seen (Mosyle)</div></div>
+  <div class="card{% if mattr.needosupdate %} warn{% endif %}">
+    <div class="num">{{ mattr.osVersion or '—' }}</div>
+    <div class="label">{% if mattr.needosupdate %}Update due: {{ mattr.needosupdate }}{% else %}OS version{% endif %}</div>
+  </div>
+  <div class="card"><div class="num">{{ (mattr.availableDiskGB | float | round | int) if mattr.availableDiskGB else '—' }}<span style="font-size:60%"> GB</span></div><div class="label">Storage free</div></div>
+  <div class="card"><div class="num">{{ mattr.isSupervised | yesno }}</div><div class="label">Supervised</div></div>
+</div>
+{% endif %}
+
 <div class="panels">
+  {% if aattr %}
   <section class="panel">
-    <h2>{{ device.attributes.get('deviceModel', 'Device') }}</h2>
-    {{ attr_table(device.attributes) }}
+    <h2>Apple Business Manager <span class="muted">owned</span></h2>
+    <table class="kv">
+      <tr><td>Model</td><td>{{ aattr.deviceModel or '—' }}</td></tr>
+      <tr><td>Family</td><td>{{ aattr.productFamily or '—' }}</td></tr>
+      <tr><td>Ordered</td><td>{{ aattr.orderDateTime | dt }}</td></tr>
+      <tr><td>Added to ABM</td><td>{{ aattr.addedToOrgDateTime | dt }}</td></tr>
+      <tr><td>Status</td><td><span class="pill {{ aattr.status | lower }}">{{ aattr.status or '—' }}</span></td></tr>
+      <tr><td>Assigned MDM</td><td>
+        {% if abm.server and abm.server.attributes %}<a href="/mdm-servers/{{ abm.server.id }}">{{ abm.server.attributes.get('serverName', abm.server.id) }}</a>
+        {% else %}<span class="warn-text">none</span>{% endif %}</td></tr>
+    </table>
+    <h3 class="spaced">AppleCare &amp; warranty</h3>
+    {% for cov in abm.coverage %}
+    <div class="coverage {{ cov.attributes.get('status', '') | lower }}">
+      <div class="cov-head">
+        <strong>{{ cov.attributes.get('description', 'Coverage') }}</strong>
+        <span class="pill {{ cov.attributes.get('status', '') | lower }}">{{ cov.attributes.get('status', '') }}</span>
+      </div>
+      <div class="muted">{{ cov.attributes.get('startDateTime') | dt }} → {{ cov.attributes.get('endDateTime') | dt }}</div>
+    </div>
+    {% else %}<p class="muted">No coverage records.</p>{% endfor %}
+  </section>
+  {% endif %}
+
+  {% if mattr %}
+  <section class="panel">
+    <h2>Mosyle <span class="muted">live</span></h2>
+    <table class="kv">
+      <tr><td>Enrollment</td><td><span class="pill success">{{ mattr.status or '—' }}</span></td></tr>
+      <tr><td>Assigned user</td><td>{{ mattr.userEmail or mattr.currentUser or mattr.userName or '—' }}</td></tr>
+      <tr><td>Last seen</td><td>{{ mattr.lastCheckIn | dtt }}</td></tr>
+      <tr><td>Lost mode</td><td>{{ mattr.lostModeStatus or '—' }}</td></tr>
+      <tr><td>Activation Lock</td><td>{{ mattr.isActivationLockEnabled | yesno }}</td></tr>
+      <tr><td>Find My</td><td>{{ mattr.isDeviceLocatorServiceEnabled | yesno }}</td></tr>
+      <tr><td>System Integrity Protection</td><td>{{ mattr.SystemIntegrityProtectionEnabled | yesno }}</td></tr>
+    </table>
+  </section>
+  {% endif %}
+
+  <section class="panel wide">
+    <h2>Activity <span class="muted">digested from both systems</span></h2>
+    {% if timeline %}
+    <table>
+      <thead><tr><th>When</th><th>Event</th><th>Source</th></tr></thead>
+      <tbody>
+      {% for item in timeline %}
+      <tr>
+        <td>{{ item.when | dtt }}</td>
+        <td>{{ item.label }}</td>
+        <td><span class="badge">{{ item.source }}</span></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No activity recorded yet.</p>
+    {% endif %}
   </section>
 
+  {% if servers and 'assign' in allowed %}
   <section class="panel">
-    <h2>MDM assignment</h2>
-    {% if server %}
-      <p>Assigned to
-        <a href="/mdm-servers/{{ server.id }}"><strong>{{ server.attributes.get('serverName', server.id) }}</strong></a>
-        ({{ server.attributes.get('serverType', '') }})
-      </p>
-    {% else %}
-      <p class="warn-text">Not assigned to any device management service.</p>
-    {% endif %}
-    {% if 'assign' in allowed %}
+    <h2>Move to MDM</h2>
     <form method="post" action="/assign" class="toolbar">
-      <input type="hidden" name="serials" value="{{ device.id }}">
+      <input type="hidden" name="serials" value="{{ device_id }}">
       <input type="hidden" name="mode" value="preview">
       <select name="server">
         {% for s in servers %}<option value="{{ s.id }}">{{ s.attributes.get('serverName', s.id) }}</option>{% endfor %}
@@ -33,24 +117,16 @@
       </select>
       <button class="btn small">Preview…</button>
     </form>
-    {% endif %}
-
-    <h2 class="spaced">AppleCare &amp; warranty</h2>
-    {% for cov in coverage %}
-    <div class="coverage {{ cov.attributes.get('status', '') | lower }}">
-      <div class="cov-head">
-        <strong>{{ cov.attributes.get('description', 'Coverage') }}</strong>
-        <span class="pill {{ cov.attributes.get('status', '') | lower }}">{{ cov.attributes.get('status', '') }}</span>
-      </div>
-      <div class="muted">
-        {{ cov.attributes.get('startDateTime') | dt }} → {{ cov.attributes.get('endDateTime') | dt }}
-        {% if cov.attributes.get('paymentType') not in (None, 'NONE') %} · {{ cov.attributes.get('paymentType') }}{% endif %}
-        {% if cov.attributes.get('isRenewable') %} · renewable{% endif %}
-      </div>
-    </div>
-    {% else %}
-    <p class="muted">No coverage records.</p>
-    {% endfor %}
   </section>
+  {% endif %}
+</div>
+
+<div class="panels">
+  {% if aattr %}
+  <section class="panel wide"><details><summary>All Apple Business Manager attributes</summary>{{ attr_table(aattr) }}</details></section>
+  {% endif %}
+  {% if mattr %}
+  <section class="panel wide"><details><summary>All Mosyle attributes</summary>{{ attr_table(mattr) }}</details></section>
+  {% endif %}
 </div>
 {% endblock %}

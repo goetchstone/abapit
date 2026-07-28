@@ -7,10 +7,12 @@
   <div class="card"><div class="num">{{ stats.total }}</div><div class="label">Devices in org</div></div>
   <div class="card"><div class="num">{{ stats.added_30 }}</div><div class="label">Added last 30 days</div></div>
   <div class="card"><div class="num">{{ stats.added_90 }}</div><div class="label">Added last 90 days</div></div>
+  {% if assignment %}
   <div class="card{% if assignment.unassigned %} warn{% endif %}">
     <div class="num">{{ assignment.unassigned | length }}</div>
     <div class="label">Not assigned to any MDM</div>
   </div>
+  {% endif %}
 </div>
 
 <div class="panels">
@@ -45,6 +47,7 @@
     {% endfor %}
   </section>
 
+  {% if assignment %}
   <section class="panel">
     <h2>Devices per MDM server</h2>
     <table>
@@ -70,6 +73,7 @@
     </div>
     {% endif %}
   </section>
+  {% endif %}
 
   <section class="panel">
     <h2>Top models</h2>

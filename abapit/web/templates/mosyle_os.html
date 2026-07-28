@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block titletag %}Mosyle OS Versions · abapit{% endblock %}
+{% block title %}Mosyle OS Versions{% endblock %}
+{% block content %}
+
+<form method="get" class="toolbar">
+  <a class="btn ghost" href="/export/mosyle-os-breakdown.csv">Export CSV</a>
+  <span class="muted">{{ report.total }} device(s) reporting to Mosyle</span>
+</form>
+
+<div class="panels">
+  <section class="panel wide">
+    <h2>OS version distribution</h2>
+    {% for version, count, pct in report.rows %}
+    <div class="hbar-row">
+      <span class="hbar-label">{{ version }}</span>
+      <div class="hbar"><div style="width:{{ (count / report.max_count * 100) | round(1) if report.max_count }}%"></div></div>
+      <span class="hbar-num">{{ count }} · {{ pct }}%</span>
+    </div>
+    {% else %}
+    <p class="muted">No devices are reporting an OS version.</p>
+    {% endfor %}
+  </section>
+</div>
+{% endblock %}

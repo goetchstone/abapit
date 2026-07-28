@@ -10,16 +10,15 @@ API, which currently covers devices and device management services.
 from __future__ import annotations
 
 import logging
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
 
-log = logging.getLogger("abapit")
-
 from .auth import token_cache
 from .config import Org
+
+log = logging.getLogger("abapit")
 
 BASE_URLS = {
     "business": "https://api-business.apple.com",
@@ -33,6 +32,7 @@ BUSINESS_SECTIONS = (
     "mdm_enrolled",
     "users",
     "user_groups",
+    "org_units",
     "apps",
     "packages",
     "blueprints",
@@ -45,9 +45,17 @@ BUSINESS_SECTIONS = (
 )
 SCHOOL_SECTIONS = ("devices", "mdm_servers", "changes", "coverage",
                    "fleet_age", "assign")
+# Mosyle is read-only here for now: device inventory plus posture reports
+# (OS-version spread, stale check-ins) that ABM structurally can't provide.
+# The ABM<->Mosyle reconciliation report is cross-org, so it is gated in
+# render() by "both providers configured" rather than via this per-org list.
+MOSYLE_SECTIONS = ("devices", "users", "user_groups", "device_groups",
+                   "mosyle_os_breakdown", "mosyle_stale", "mosyle_logs")
 
 
-def sections_for(scope: str) -> tuple[str, ...]:
+def sections_for(scope: str, provider: str = "apple") -> tuple[str, ...]:
+    if provider == "mosyle":
+        return MOSYLE_SECTIONS
     return BUSINESS_SECTIONS if scope == "business" else SCHOOL_SECTIONS
 
 
@@ -126,7 +134,10 @@ class ApiClient:
         log.info("%s %s -> %d (%.0f ms)", method, url, resp.status_code, elapsed_ms)
         if resp.status_code >= 400:
             raise ApiError(resp.status_code, _error_message(resp))
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:
+            return {}  # 204 No Content (relationship add/remove, delete)
 
     def get(self, path: str, params: dict | None = None) -> dict:
         return self._request(f"{self.base_url}/v1/{path}", params)
@@ -212,12 +223,23 @@ class ApiClient:
         ("mdm_enrolled", "Apple MDM enrolled", "mdmDevices", {"limit": 1}, True),
         ("users", "Users", "users", {"limit": 1}, True),
         ("user_groups", "User groups", "userGroups", {"limit": 1}, True),
+        ("org_units", "Org units", "orgUnits", {"limit": 1}, True),
         ("apps", "Apps", "apps", {"limit": 1}, True),
         ("packages", "Packages", "packages", {"limit": 1}, True),
         ("blueprints", "Blueprints", "blueprints", {"limit": 1}, True),
         ("configurations", "Configurations", "configurations", {"limit": 1}, True),
         ("audit_events", "Audit events", "auditEvents", None, True),  # params at runtime
     )
+
+    # (section key, label, resource) — probed with a STRUCTURALLY HARMLESS
+    # mutation against a non-existent id so it can never change anything:
+    # 403 => forbidden, a validation/not-found (400/404/409/422) => allowed.
+    WRITE_PROBES = (
+        ("blueprints_write", "Blueprint management", "blueprints"),
+        ("configurations_write", "Configuration management", "configurations"),
+        ("mdm_servers_write", "MDM server management", "mdmServers"),
+    )
+    ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 
     def probe_capabilities(self) -> list[dict]:
         """Empirically map what this API account's role allows.
@@ -261,6 +283,27 @@ class ApiClient:
                 status = f"error {exc.status}"
         results.append({"section": "assign", "capability": "Device assignment",
                         "kind": "write", "status": status})
+
+        # New v2.0+ writes (Business only): blueprint/config/mdm-server management.
+        if self.org.scope == "business":
+            for section, label, resource in self.WRITE_PROBES:
+                try:
+                    if resource == "blueprints":
+                        self._request(f"{self.base_url}/v1/blueprints/"
+                                      f"{self.ZERO_UUID}/relationships/apps",
+                                      method="POST", json_body={"data": []})
+                    else:
+                        self._request(f"{self.base_url}/v1/{resource}/{self.ZERO_UUID}",
+                                      method="PATCH", json_body={"data": {
+                                          "type": resource, "id": self.ZERO_UUID,
+                                          "attributes": {}}})
+                    status = "ok"
+                except ApiError as exc:
+                    status = ("forbidden" if exc.status == 403 else
+                              "ok" if exc.status in (400, 404, 409, 422)
+                              else f"error {exc.status}")
+                results.append({"section": section, "capability": label,
+                                "kind": "write", "status": status})
         return results
 
     # -- people (Business API only) -----------------------------------------
@@ -281,6 +324,18 @@ class ApiClient:
         linkages = self.list_all(f"userGroups/{group_id}/relationships/users")
         return [item.get("id", "") for item in linkages]
 
+    # -- organizational units (Business API only) -----------------------------
+
+    def org_units(self) -> list[dict]:
+        return self.list_all("orgUnits")
+
+    def org_unit(self, org_unit_id: str) -> dict:
+        return self.get(f"orgUnits/{org_unit_id}").get("data", {})
+
+    def org_unit_user_ids(self, org_unit_id: str) -> list[str]:
+        linkages = self.list_all(f"orgUnits/{org_unit_id}/relationships/users")
+        return [item.get("id", "") for item in linkages]
+
     # -- content (Business API only) ------------------------------------------
 
     def apps(self) -> list[dict]:
@@ -295,6 +350,66 @@ class ApiClient:
     def blueprint(self, blueprint_id: str, include: str = "") -> dict:
         params = {"include": include} if include else None
         return self.get(f"blueprints/{blueprint_id}", params)
+
+    # -- generic JSON:API resource writes ------------------------------------
+    # Same shape for every writable v2.0+ resource (blueprints, configurations,
+    # mdmServers), so the per-resource methods stay one-liners.
+
+    def _create_resource(self, resource: str, attrs: dict) -> dict:
+        body = {"data": {"type": resource, "attributes": attrs}}
+        return self._request(f"{self.base_url}/v1/{resource}",
+                             method="POST", json_body=body).get("data", {})
+
+    def _update_resource(self, resource: str, item_id: str, attrs: dict) -> dict:
+        body = {"data": {"type": resource, "id": item_id, "attributes": attrs}}
+        return self._request(f"{self.base_url}/v1/{resource}/{item_id}",
+                             method="PATCH", json_body=body).get("data", {})
+
+    def _delete_resource(self, resource: str, item_id: str) -> None:
+        self._request(f"{self.base_url}/v1/{resource}/{item_id}", method="DELETE")
+
+    def create_blueprint(self, attrs: dict) -> dict:
+        return self._create_resource("blueprints", attrs)
+
+    def update_blueprint(self, blueprint_id: str, attrs: dict) -> dict:
+        return self._update_resource("blueprints", blueprint_id, attrs)
+
+    def delete_blueprint(self, blueprint_id: str) -> None:
+        self._delete_resource("blueprints", blueprint_id)
+
+    # Blueprint relationship: UI key -> (URL segment, JSON:API resource type).
+    # Segments/types confirmed against abapit's existing reads where possible
+    # (orgDevices is the device type per create_device_activity); confirm the
+    # rest against the live reference.
+    BLUEPRINT_RELATIONSHIPS = {
+        "apps": ("apps", "apps"),
+        "packages": ("packages", "packages"),
+        "configurations": ("configurations", "configurations"),
+        "userGroups": ("userGroups", "userGroups"),
+        "devices": ("devices", "orgDevices"),
+        "users": ("users", "users"),
+    }
+
+    def blueprint_relationship_ids(self, blueprint_id: str, rel: str) -> list[str]:
+        segment, _ = self.BLUEPRINT_RELATIONSHIPS[rel]
+        linkages = self.list_all(f"blueprints/{blueprint_id}/relationships/{segment}")
+        return [item.get("id", "") for item in linkages]
+
+    def add_blueprint_relationship(self, blueprint_id: str, rel: str,
+                                   ids: list[str]) -> dict:
+        return self._blueprint_rel_write(blueprint_id, rel, ids, "POST")
+
+    def remove_blueprint_relationship(self, blueprint_id: str, rel: str,
+                                      ids: list[str]) -> dict:
+        return self._blueprint_rel_write(blueprint_id, rel, ids, "DELETE")
+
+    def _blueprint_rel_write(self, blueprint_id: str, rel: str,
+                             ids: list[str], method: str) -> dict:
+        segment, type_ = self.BLUEPRINT_RELATIONSHIPS[rel]
+        body = {"data": [{"type": type_, "id": i} for i in ids]}
+        return self._request(
+            f"{self.base_url}/v1/blueprints/{blueprint_id}/relationships/{segment}",
+            method=method, json_body=body)
 
     def configurations(self) -> list[dict]:
         return self.list_all("configurations")
@@ -314,6 +429,10 @@ class ApiClient:
         if event_type:
             params["filter[type]"] = event_type
         return self.list_all("auditEvents", params)
+
+    def ping(self) -> None:
+        """Cheap auth/connectivity check for Settings → Test."""
+        self.get("orgDevices", {"limit": 1})
 
     def close(self) -> None:
         self._http.close()

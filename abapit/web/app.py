@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import contextvars
 import logging
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -27,11 +26,23 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .. import __version__, config, history
 from ..assign import plan as plan_assignment
 from ..auth import AuthError, token_cache
-from ..client import ApiClient, ApiError, sections_for
+from ..blueprint_plan import plan_relationship
+from ..client import ApiError, sections_for
 from ..demo import DemoClient
-from ..reports import (assignment_summary, coverage_report, device_stats,
-                       fleet_age_report, items_to_csv, items_to_rows,
-                       parse_iso)
+from ..factory import build_client
+from ..reports import (
+    assignment_summary,
+    coverage_report,
+    device_stats,
+    device_timeline,
+    fleet_age_report,
+    items_to_csv,
+    items_to_rows,
+    mosyle_os_breakdown,
+    mosyle_stale_devices,
+    parse_iso,
+    reconcile_enrollments,
+)
 
 CACHE_TTL = 300  # seconds
 MAX_TABLE_ROWS = 500
@@ -42,11 +53,13 @@ NAV = [
         ("devices", "/devices", "Devices"),
         ("mdm_servers", "/mdm-servers", "MDM Servers"),
         ("mdm_enrolled", "/mdm-enrolled", "Apple MDM Enrolled"),
+        ("device_groups", "/device-groups", "Device Groups"),
         ("assign", "/assign", "Assign to MDM"),
     ]),
     ("People", [
         ("users", "/users", "Users"),
         ("user_groups", "/user-groups", "User Groups"),
+        ("org_units", "/org-units", "Org Units"),
     ]),
     ("Content", [
         ("apps", "/apps", "Apps"),
@@ -56,11 +69,15 @@ NAV = [
     ]),
     ("Activity", [
         ("audit_events", "/audit-events", "Audit Events"),
+        ("mosyle_logs", "/mosyle-activity", "Activity & Compliance"),
         ("changes", "/changes", "Changes"),
     ]),
     ("Reports", [
         ("coverage", "/reports/coverage", "Coverage"),
         ("fleet_age", "/reports/fleet-age", "Fleet Age"),
+        ("mosyle_os_breakdown", "/reports/mosyle-os-breakdown", "Mosyle OS Versions"),
+        ("mosyle_stale", "/reports/mosyle-stale", "Mosyle Stale Devices"),
+        ("reconciliation", "/reports/reconciliation", "ABM ↔ Mosyle"),
     ]),
 ]
 
@@ -81,6 +98,10 @@ SNAPSHOT_RESOURCES = {
 
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 
+# Write-capability keys (match ApiClient.WRITE_PROBES); forms render only when
+# the active org's role is probed `ok` or not-yet-probed (optimistic).
+WRITE_SECTIONS = ("blueprints_write", "configurations_write", "mdm_servers_write")
+
 log = logging.getLogger("abapit")
 
 # Set per-request when a page was served from snapshot data; read by render().
@@ -94,6 +115,8 @@ RESOURCES = {
     "mdm-enrolled": ("mdm_enrolled_devices", "Apple MDM Enrolled Devices"),
     "users": ("users", "Users"),
     "user-groups": ("user_groups", "User Groups"),
+    "org-units": ("org_units", "Org Units"),
+    "device-groups": ("device_groups", "Device Groups"),
     "apps": ("apps", "Apps"),
     "packages": ("packages", "Packages"),
     "blueprints": ("blueprints", "Blueprints"),
@@ -112,6 +135,73 @@ def fmt_date(value, with_time: bool = False):
     return parsed.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
 
 
+def fmt_ago(value):
+    """Relative 'last seen' for the device-360 posture strip."""
+    parsed = parse_iso(value) if isinstance(value, str) else None
+    if not parsed:
+        return "—"
+    secs = (datetime.now(timezone.utc) - parsed).total_seconds()
+    if secs < 0:
+        return fmt_date(value, with_time=True)
+    if secs < 90:
+        return "just now"
+    if secs < 5400:
+        return f"{int(secs // 60)} min ago"
+    if secs < 129600:
+        return f"{int(secs // 3600)} h ago"
+    return f"{int(secs // 86400)} d ago"
+
+
+def fmt_yesno(value):
+    """Mosyle returns booleans as '1'/'0' strings; render them readably."""
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes"):
+        return "Yes"
+    if text in ("0", "false", "no", "", "none"):
+        return "No"
+    return value
+
+
+def _orgs_by_provider(cfg, provider: str) -> list[tuple[str, object]]:
+    return [(slug, org) for slug, org in cfg.orgs.items()
+            if org.provider == provider]
+
+
+def _has_both_providers(cfg) -> bool:
+    return bool(_orgs_by_provider(cfg, "apple")) and bool(_orgs_by_provider(cfg, "mosyle"))
+
+
+def _find_serial(devices: list[dict], device_id: str):
+    key = (device_id or "").strip().upper()
+    return next((d for d in devices if (d.get("id") or "").strip().upper() == key), None)
+
+
+def _other_provider_slug(cfg, provider: str):
+    """Slug of an org of the OTHER provider, to merge into a device 360."""
+    orgs = _orgs_by_provider(cfg, "mosyle" if provider == "apple" else "apple")
+    # active_org belongs to the current provider, never the other one, so it's
+    # always the first org of the other provider.
+    return orgs[0][0] if orgs else None
+
+
+def _abm_audit(c, serial: str, days: int = 30) -> list[dict]:
+    """Best-effort ABM audit events naming this serial (device lifecycle:
+    added, assigned/unassigned). Empty if the role can't read audit events."""
+    if "audit_events" not in sections_for(c.org.scope, c.org.provider):
+        return []
+    try:
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=days)
+        events = c.audit_events(start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                end.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    except (ApiError, AuthError):
+        return []
+    key = (serial or "").strip().upper()
+    return [e for e in events
+            if str(e.get("attributes", {}).get("subjectId", "")).strip().upper() == key
+            or str(e.get("attributes", {}).get("subjectName", "")).strip().upper() == key][:20]
+
+
 def create_app(demo: bool = False,
                allowed_hosts: list[str] | None = None) -> FastAPI:
     app = FastAPI(title="abapit", docs_url=None, redoc_url=None)
@@ -120,6 +210,8 @@ def create_app(demo: bool = False,
     templates = Jinja2Templates(directory=base / "templates")
     templates.env.filters["dt"] = fmt_date
     templates.env.filters["dtt"] = lambda v: fmt_date(v, with_time=True)
+    templates.env.filters["ago"] = fmt_ago
+    templates.env.filters["yesno"] = fmt_yesno
 
     # Reject requests whose Host header isn't ours — blocks DNS-rebinding
     # attacks, where a malicious site points its own domain at 127.0.0.1.
@@ -130,21 +222,26 @@ def create_app(demo: bool = False,
     async def block_cross_origin_posts(request: Request, call_next):
         """Browsers happily fire cross-origin form POSTs at localhost.
         Reject mutations that arrive from another web origin (CSRF);
-        same-origin browser posts and non-browser clients are unaffected."""
+        same-origin browser posts and non-browser clients are unaffected.
+
+        Both checks compare the FULL origin (scheme + host + port), not just
+        the hostname: another app on a different loopback PORT is a different
+        origin, and browsers label such a request `same-site` (loopback hosts
+        have no registrable domain), so neither a localhost host allow-list nor
+        accepting `same-site` would be safe.
+        """
         if request.method == "POST":
             origin = request.headers.get("origin")
-            if origin:
-                origin_host = urlsplit(origin).hostname
-                if origin_host != request.url.hostname and origin_host not in LOCAL_HOSTS:
-                    return Response("Cross-origin POST blocked.", status_code=403)
+            if origin and origin != f"{request.url.scheme}://{request.url.netloc}":
+                return Response("Cross-origin POST blocked.", status_code=403)
             fetch_site = request.headers.get("sec-fetch-site")
-            if fetch_site and fetch_site not in ("same-origin", "same-site", "none"):
+            if fetch_site and fetch_site not in ("same-origin", "none"):
                 return Response("Cross-site request blocked.", status_code=403)
         return await call_next(request)
 
     app.state.demo = demo
     app.state.demo_client = DemoClient() if demo else None
-    app.state.clients = {}          # org slug -> ApiClient
+    app.state.clients = {}          # org slug -> provider client
     app.state.cache = {}            # (org key, name) -> (timestamp, value)
     app.state.refreshing = set()    # cache keys with a background fetch in flight
     app.state.refresh_lock = threading.Lock()
@@ -160,7 +257,7 @@ def create_app(demo: bool = False,
         if org is None:
             raise NoOrgError()
         if cfg.active_org not in app.state.clients:
-            app.state.clients[cfg.active_org] = ApiClient(org)
+            app.state.clients[cfg.active_org] = build_client(org)
         return app.state.clients[cfg.active_org]
 
     def cached(name: str, fetch, force: bool = False):
@@ -189,6 +286,25 @@ def create_app(demo: bool = False,
                 _refresh_in_background(key, fetch, c)
                 _stale_ctx.set({"taken_at": taken_at})
                 return value
+        value = fetch(c)
+        app.state.cache[key] = (time.time(), value)
+        return value
+
+    def cached_for(slug: str, name: str, fetch):
+        """Like cached(), but for an explicitly chosen org (used by the
+        cross-org reconciliation report, which can't rely on the single
+        active client). Shares app.state.cache keyed on the org's client_id,
+        so the active org's `devices` entry is reused rather than refetched."""
+        org = config.load().orgs.get(slug)
+        if org is None:
+            raise NoOrgError()
+        if slug not in app.state.clients:
+            app.state.clients[slug] = build_client(org)
+        c = app.state.clients[slug]
+        key = (c.org.client_id, name)
+        hit = app.state.cache.get(key)
+        if hit and time.time() - hit[0] < CACHE_TTL:
+            return hit[1]
         value = fetch(c)
         app.state.cache[key] = (time.time(), value)
         return value
@@ -237,13 +353,21 @@ def create_app(demo: bool = False,
             pass
         cfg = config.load() if not app.state.demo else None
         scope = c.org.scope if c else "business"
-        allowed = set(sections_for(scope))
+        provider = c.org.provider if c else "apple"
+        allowed = set(sections_for(scope, provider))
+        # Reconciliation is cross-org, so it isn't a per-org section: surface
+        # it whenever the config has at least one Apple AND one Mosyle org,
+        # regardless of which one is currently active.
+        if cfg and _has_both_providers(cfg):
+            allowed.add("reconciliation")
         nav = [(group, [item for item in items if item[0] in allowed or item[0] == "dashboard"])
                for group, items in NAV]
         nav = [(group, items) for group, items in nav if items]
         # Locks must reflect the config as of THIS request — never the Org
         # snapshot frozen inside a cached ApiClient.
         fresh_org = cfg.get_active() if cfg else None
+        caps = fresh_org.capabilities if fresh_org else {}
+        writable = {k for k in WRITE_SECTIONS if caps.get(k) != "forbidden"}
         return templates.TemplateResponse(request, template, {
             "active": active,
             "version": __version__,
@@ -257,16 +381,18 @@ def create_app(demo: bool = False,
             "active_org": cfg.active_org if cfg else "demo",
             "msg": request.query_params.get("msg", ""),
             "allowed": allowed,
+            "writable": writable,
             **ctx,
         })
 
     def guard(section: str):
         """Redirect to the dashboard if this section isn't available for the
-        active org's scope (e.g. users on an Apple School Manager org)."""
-        if section not in sections_for(client().org.scope):
-            scope = client().org.scope
+        active org's provider/scope (e.g. users on an Apple School Manager
+        org, or anything beyond devices on a Mosyle org)."""
+        org = client().org
+        if section not in sections_for(org.scope, org.provider):
             raise ApiError(404, f"The {section} section is not available for "
-                                f"{scope} orgs.")
+                                f"{org.provider}/{org.scope} orgs.")
 
     def matches(item: dict, q: str) -> bool:
         needle = q.lower()
@@ -313,13 +439,19 @@ def create_app(demo: bool = False,
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
+        org = client().org
+        allowed = sections_for(org.scope, org.provider)
         devices = cached("devices", lambda c: c.devices())
-        servers = cached("mdm_servers", lambda c: c.mdm_servers())
-        server_ids = cached("server_device_ids", lambda c: _server_ids(c, servers))
         stats = device_stats(devices)
-        assignment = assignment_summary(devices, servers, server_ids)
+        # MDM-server/assignment data is an ABM concept; skip it for providers
+        # that don't model it (Mosyle), so the page shows device stats only.
+        assignment = None
+        if "mdm_servers" in allowed:
+            servers = cached("mdm_servers", lambda c: c.mdm_servers())
+            server_ids = cached("server_device_ids", lambda c: _server_ids(c, servers))
+            assignment = assignment_summary(devices, servers, server_ids)
         events = []
-        if "audit_events" in sections_for(client().org.scope):
+        if "audit_events" in allowed:
             try:
                 end = datetime.now(timezone.utc)
                 start = end - timedelta(days=7)
@@ -375,19 +507,55 @@ def create_app(demo: bool = False,
 
     @app.get("/devices/{device_id}", response_class=HTMLResponse)
     def device_page(request: Request, device_id: str):
-        def fetch_detail(c):
-            # Three independent calls — fetch concurrently (~1 RTT, not 3).
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                f_device = pool.submit(c.device, device_id)
-                f_coverage = pool.submit(c.device_applecare, device_id)
-                f_server = pool.submit(c.device_assigned_server, device_id)
-                return f_device.result(), f_coverage.result(), f_server.result()
+        """Device 360: the active org's half, merged with the other provider's
+        half (when configured) and a digested per-device activity timeline."""
+        c = client()
 
-        device, coverage, server = cached(f"device:{device_id}", fetch_detail)
-        servers = cached("mdm_servers", lambda cc: cc.mdm_servers())
+        def abm_detail(cc):
+            # Three independent ABM calls — fetch concurrently (~1 RTT, not 3).
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                f_device = pool.submit(cc.device, device_id)
+                f_coverage = pool.submit(cc.device_applecare, device_id)
+                f_server = pool.submit(cc.device_assigned_server, device_id)
+                return {"device": f_device.result(), "coverage": f_coverage.result(),
+                        "server": f_server.result()}
+
+        apple_side = mosyle_side = None
+        abm_audit: list = []
+        if c.org.provider == "mosyle":
+            mosyle_side = _find_serial(cached("devices", lambda cc: cc.devices()), device_id)
+        else:
+            apple_side = cached(f"device:{device_id}", abm_detail)
+            abm_audit = _abm_audit(c, device_id)
+
+        # Merge the other provider's half, if one is configured (not in demo).
+        if not app.state.demo:
+            cfg = config.load()
+            other = _other_provider_slug(cfg, c.org.provider)
+            if other and c.org.provider == "apple":
+                try:
+                    mosyle_side = _find_serial(
+                        cached_for(other, "devices", lambda cc: cc.devices()), device_id)
+                except (ApiError, AuthError):
+                    mosyle_side = None
+            elif other:
+                try:
+                    apple_side = cached_for(other, f"device:{device_id}", abm_detail)
+                    abm_audit = _abm_audit(app.state.clients[other], device_id)
+                except (ApiError, AuthError):
+                    apple_side = None
+
+        abm_device = (apple_side or {}).get("device") or {}
+        if not abm_device and not mosyle_side:
+            raise ApiError(404, "Device not found in this org.")
+        timeline = device_timeline(abm_device.get("attributes"),
+                                   (mosyle_side or {}).get("attributes"), abm_audit)
+        servers = []
+        if "assign" in sections_for(c.org.scope, c.org.provider):
+            servers = cached("mdm_servers", lambda cc: cc.mdm_servers())
         return render(request, "device_detail.html", active="devices",
-                      device=device, coverage=coverage, server=server,
-                      servers=servers)
+                      device_id=device_id, abm=apple_side, mosyle=mosyle_side,
+                      timeline=timeline, servers=servers)
 
     @app.get("/mdm-servers", response_class=HTMLResponse)
     def mdm_servers_page(request: Request):
@@ -418,6 +586,12 @@ def create_app(demo: bool = False,
         guard("users")
         users = cached("users", lambda c: c.users())
         rows = [u for u in users if not q or matches(u, q)]
+        # Mosyle users have a different shape than ABM's — render generically
+        # rather than through ABM-specific columns.
+        if client().org.provider == "mosyle":
+            header, table = items_to_rows(rows[:MAX_TABLE_ROWS])
+            return render(request, "generic_table.html", active="users",
+                          title="Users", header=header, rows=table, export="users")
         return render(request, "users.html", active="users",
                       users=rows[:MAX_TABLE_ROWS], q=q, total=len(users))
 
@@ -425,7 +599,68 @@ def create_app(demo: bool = False,
     def groups_page(request: Request):
         guard("user_groups")
         groups = cached("user_groups", lambda c: c.user_groups())
+        if client().org.provider == "mosyle":
+            header, table = items_to_rows(groups)
+            return render(request, "generic_table.html", active="user_groups",
+                          title="User Groups", header=header, rows=table,
+                          export="user-groups")
         return render(request, "user_groups.html", active="user_groups", groups=groups)
+
+    @app.get("/org-units", response_class=HTMLResponse)
+    def org_units_page(request: Request):
+        guard("org_units")
+        units = cached("org_units", lambda c: c.org_units())
+        header, table = items_to_rows(units)
+        return render(request, "generic_table.html", active="org_units",
+                      title="Organizational Units", header=header, rows=table,
+                      export="org-units")
+
+    @app.get("/org-units/{org_unit_id}", response_class=HTMLResponse)
+    def org_unit_page(request: Request, org_unit_id: str):
+        guard("org_units")
+        item = cached(f"org_unit:{org_unit_id}", lambda c: c.org_unit(org_unit_id))
+        return render(request, "item_detail.html", active="org_units",
+                      title=item.get("attributes", {}).get("name", org_unit_id),
+                      back_href="/org-units", back_label="Org Units",
+                      plain_attrs=item.get("attributes", {}),
+                      payload="", payload_label="")
+
+    @app.get("/device-groups", response_class=HTMLResponse)
+    def device_groups_page(request: Request):
+        guard("device_groups")
+        groups = cached("device_groups", lambda c: c.device_groups())
+        header, table = items_to_rows(groups)
+        return render(request, "generic_table.html", active="device_groups",
+                      title="Device Groups", header=header, rows=table,
+                      export="device-groups")
+
+    @app.get("/mosyle-activity", response_class=HTMLResponse)
+    def mosyle_activity_page(request: Request, type: str = ""):
+        guard("mosyle_logs")
+        c = client()
+        if not c.org.mosyle_logs_token:
+            return render(request, "mosyle_logs.html", active="mosyle_logs",
+                          events=None, counts={}, non_compliant=0, type=type)
+        # Logs Stream drains on read — drain (cache-throttled) and append to the
+        # per-org store, then display the accumulated history. The drain is
+        # destructive (Mosyle won't re-serve consumed events), so only do it for
+        # a genuine same-origin page view, never a cross-origin GET.
+        def _drain_and_store(cc):
+            return history.append_mosyle_logs(cc.org.client_id, cc.logs())
+        if request.headers.get("sec-fetch-site") in (None, "same-origin", "none"):
+            cached("mosyle_logs", _drain_and_store)
+        all_events = history.load_mosyle_logs(c.org.client_id)
+        counts: dict = {}
+        for event in all_events:
+            counts[event["kind"]] = counts.get(event["kind"], 0) + 1
+        non_compliant = sum(1 for e in all_events if e["kind"] == "compliance"
+                            and "lost" in e["status"].lower())
+        events = [e for e in all_events if not type or e["kind"] == type]
+        return render(request, "mosyle_logs.html", active="mosyle_logs",
+                      events=events[:MAX_TABLE_ROWS], counts=counts,
+                      non_compliant=non_compliant, type=type, total=len(events),
+                      captured=len(all_events),
+                      enabled_types=getattr(c, "last_log_types", []))
 
     @app.get("/user-groups/{group_id}", response_class=HTMLResponse)
     def group_page(request: Request, group_id: str):
@@ -462,16 +697,191 @@ def create_app(demo: bool = False,
         return render(request, "blueprints.html", active="blueprints",
                       blueprints=blueprints)
 
-    @app.get("/blueprints/{blueprint_id}", response_class=HTMLResponse)
-    def blueprint_page(request: Request, blueprint_id: str):
+    def _bust_blueprints():
+        org_key = client().org.client_id
+        app.state.cache = {k: v for k, v in app.state.cache.items()
+                           if not (k[0] == org_key and k[1] == "blueprints")}
+
+    def _require_write(key: str):
+        """Server-side check — the template also hides the forms, but a POST
+        must never depend on the UI having hidden a button."""
+        if not _is_writable(key):
+            raise ApiError(403, "This API account's role can't make that change "
+                                "(re-check Permissions in Settings if the role changed).")
+
+    # NOTE: must be registered before /blueprints/{blueprint_id} or "new" is
+    # matched as an id.
+    @app.get("/blueprints/new", response_class=HTMLResponse)
+    def blueprint_new_form(request: Request):
         guard("blueprints")
-        body = client().blueprint(
-            blueprint_id, include="apps,packages,configurations,userGroups")
+        _require_write("blueprints_write")
+        return render(request, "blueprint_edit.html", active="blueprints",
+                      blueprint=None, error="")
+
+    @app.get("/blueprints/{blueprint_id}/edit", response_class=HTMLResponse)
+    def blueprint_edit_form(request: Request, blueprint_id: str):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        bp = client().blueprint(blueprint_id).get("data", {})
+        return render(request, "blueprint_edit.html", active="blueprints",
+                      blueprint=bp, error="")
+
+    @app.post("/blueprints", response_class=HTMLResponse)
+    def blueprint_create(request: Request, name: str = Form(""),
+                         description: str = Form("")):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        if not name.strip():
+            return render(request, "blueprint_edit.html", active="blueprints",
+                          blueprint=None, error="A blueprint needs a name.")
+        created = client().create_blueprint({"name": name.strip(),
+                                             "description": description.strip()})
+        _bust_blueprints()
+        msg = f"Created blueprint {name.strip()!r}."
+        return RedirectResponse(f"/blueprints/{created.get('id', '')}?msg={quote(msg)}",
+                                status_code=303)
+
+    @app.post("/blueprints/{blueprint_id}/edit", response_class=HTMLResponse)
+    def blueprint_update(request: Request, blueprint_id: str, name: str = Form(""),
+                         description: str = Form("")):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        if not name.strip():
+            bp = client().blueprint(blueprint_id).get("data", {})
+            return render(request, "blueprint_edit.html", active="blueprints",
+                          blueprint=bp, error="A blueprint needs a name.")
+        client().update_blueprint(blueprint_id, {"name": name.strip(),
+                                                 "description": description.strip()})
+        _bust_blueprints()
+        msg = "Blueprint updated."
+        return RedirectResponse(f"/blueprints/{blueprint_id}?msg={quote(msg)}",
+                                status_code=303)
+
+    @app.get("/blueprints/{blueprint_id}/delete", response_class=HTMLResponse)
+    def blueprint_delete_confirm(request: Request, blueprint_id: str):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        c = client()
+        bp = c.blueprint(blueprint_id).get("data", {})
+        name = bp.get("attributes", {}).get("name", blueprint_id)
+        # Blast radius: what this blueprint currently drives.
+        radius = []
+        for rel in BP_RELS:
+            try:
+                count = len(c.blueprint_relationship_ids(blueprint_id, rel))
+            except ApiError:
+                continue
+            if count:
+                radius.append((BP_REL_TITLES[rel], count))
+        return render(request, "confirm.html", active="blueprints",
+                      title=f"Delete blueprint “{name}”?",
+                      warning="Deleting a blueprint is permanent and stops it "
+                              "provisioning the devices and people below.",
+                      radius=radius, confirm_word=name,
+                      action=f"/blueprints/{blueprint_id}/delete",
+                      cancel_href=f"/blueprints/{blueprint_id}",
+                      submit_label="Delete blueprint")
+
+    @app.post("/blueprints/{blueprint_id}/delete")
+    def blueprint_delete(blueprint_id: str, confirm: str = Form("")):
+        guard("blueprints")
+        _require_write("blueprints_write")
+        c = client()
+        bp = c.blueprint(blueprint_id).get("data", {})
+        name = bp.get("attributes", {}).get("name", blueprint_id)
+        if confirm.strip() != name:
+            raise ApiError(400, "The typed name didn't match — nothing was deleted.")
+        c.delete_blueprint(blueprint_id)
+        _bust_blueprints()
+        return RedirectResponse(f"/blueprints?msg={quote(f'Deleted blueprint {name!r}.')}",
+                                status_code=303)
+
+    BP_RELS = ("apps", "configurations", "packages", "userGroups", "devices", "users")
+    BP_REL_TITLES = {"apps": "Apps", "configurations": "Configurations",
+                     "packages": "Packages", "userGroups": "User Groups",
+                     "devices": "Devices", "users": "Users"}
+
+    def _is_writable(key: str) -> bool:
+        if app.state.demo:
+            return True
+        org = config.load().get_active()
+        return bool(org) and org.capabilities.get(key) != "forbidden"
+
+    def _bp_catalog(c, rel: str) -> dict:
+        """id -> display label for a relationship's selectable items."""
+        if rel == "apps":
+            items, label = cached("apps", lambda cc: cc.apps()), (
+                lambda a: a["attributes"].get("name") or a["attributes"].get("bundleId") or a["id"])
+        elif rel == "configurations":
+            items, label = cached("configurations", lambda cc: cc.configurations()), (
+                lambda x: x["attributes"].get("name") or x["id"])
+        elif rel == "packages":
+            items, label = cached("packages", lambda cc: cc.packages()), (
+                lambda x: x["attributes"].get("name") or x["id"])
+        elif rel == "userGroups":
+            items, label = cached("user_groups", lambda cc: cc.user_groups()), (
+                lambda g: g["attributes"].get("name") or g["id"])
+        elif rel == "devices":
+            items, label = cached("devices", lambda cc: cc.devices()), (
+                lambda d: (d["attributes"].get("deviceModel") or "").strip() or d["id"])
+        else:  # users
+            items, label = cached("users", lambda cc: cc.users()), (
+                lambda u: u["attributes"].get("managedAppleAccount")
+                or u["attributes"].get("email") or u["id"])
+        return {i["id"]: label(i) for i in items}
+
+    def _render_blueprint(request: Request, blueprint_id: str, rel_plan=None):
+        c = client()
+        body = c.blueprint(blueprint_id, include="apps,packages,configurations,userGroups")
         included: dict[str, list] = {}
         for item in body.get("included", []):
             included.setdefault(item.get("type", "other"), []).append(item)
+        rels = []
+        if _is_writable("blueprints_write"):  # skip heavy catalogs for read-only roles
+            for rel in BP_RELS:
+                catalog = _bp_catalog(c, rel)
+                current = c.blueprint_relationship_ids(blueprint_id, rel)  # not cached: fresh after writes
+                rels.append({"key": rel, "title": BP_REL_TITLES[rel],
+                             "current": [{"id": i, "label": catalog.get(i, i)} for i in current]})
         return render(request, "blueprint_detail.html", active="blueprints",
-                      blueprint=body.get("data", {}), included=included)
+                      blueprint=body.get("data", {}), included=included,
+                      blueprint_id=blueprint_id, rels=rels, rel_plan=rel_plan)
+
+    @app.get("/blueprints/{blueprint_id}", response_class=HTMLResponse)
+    def blueprint_page(request: Request, blueprint_id: str):
+        guard("blueprints")
+        return _render_blueprint(request, blueprint_id)
+
+    @app.post("/blueprints/{blueprint_id}/relationships", response_class=HTMLResponse)
+    def blueprint_rel_submit(request: Request, blueprint_id: str, rel: str = Form(...),
+                             op: str = Form("add"), ids: str = Form(""),
+                             mode: str = Form("preview")):
+        guard("blueprints")
+        if rel not in BP_RELS:
+            raise ApiError(400, f"unknown blueprint relationship {rel!r}")
+        c = client()
+        catalog = _bp_catalog(c, rel)
+        current = c.blueprint_relationship_ids(blueprint_id, rel)
+        selected = ids.replace(",", " ").replace(";", " ").split()
+        p = plan_relationship(op, selected, current, catalog)
+        if mode == "execute" and p["changes"]:
+            change_ids = [row["id"] for row in p["changes"]]
+            if op == "add":
+                c.add_blueprint_relationship(blueprint_id, rel, change_ids)
+            else:
+                c.remove_blueprint_relationship(blueprint_id, rel, change_ids)
+            org_key = c.org.client_id
+            app.state.cache = {k: v for k, v in app.state.cache.items()
+                               if not (k[0] == org_key and k[1] == "blueprints")}
+            verb = "Added" if op == "add" else "Removed"
+            prep = "to" if op == "add" else "from"
+            msg = (f"{verb} {len(change_ids)} {BP_REL_TITLES[rel].lower()} "
+                   f"{prep} this blueprint.")
+            return RedirectResponse(f"/blueprints/{blueprint_id}?msg={quote(msg)}",
+                                    status_code=303)
+        return _render_blueprint(request, blueprint_id,
+                                 rel_plan={"rel": rel, "title": BP_REL_TITLES[rel],
+                                           "op": op, "ids": ids, "plan": p})
 
     @app.get("/configurations", response_class=HTMLResponse)
     def configurations_page(request: Request):
@@ -663,12 +1073,97 @@ def create_app(demo: bool = False,
         return render(request, "fleet_age.html", active="fleet_age",
                       report=_fleet_age(years), years=years)
 
+    @app.get("/reports/mosyle-os-breakdown", response_class=HTMLResponse)
+    def mosyle_os_page(request: Request):
+        guard("mosyle_os_breakdown")
+        devices = cached("devices", lambda c: c.devices())
+        return render(request, "mosyle_os.html", active="mosyle_os_breakdown",
+                      report=mosyle_os_breakdown(devices))
+
+    @app.get("/reports/mosyle-stale", response_class=HTMLResponse)
+    def mosyle_stale_page(request: Request, days: int = 30):
+        guard("mosyle_stale")
+        days = max(1, min(days, 365))
+        devices = cached("devices", lambda c: c.devices())
+        return render(request, "mosyle_stale.html", active="mosyle_stale",
+                      report=mosyle_stale_devices(devices, days), days=days)
+
+    def _reconciliation_pair(cfg, abm: str, mosyle: str):
+        """Resolve the (abm_slug, mosyle_slug) to compare: an explicit query
+        choice if valid, else the active org for its provider, else the first
+        org of that provider. Returns None if either provider is absent."""
+        apple_orgs = _orgs_by_provider(cfg, "apple")
+        mosyle_orgs = _orgs_by_provider(cfg, "mosyle")
+        if not apple_orgs or not mosyle_orgs:
+            return None
+        abm_slugs = [s for s, _ in apple_orgs]
+        mosyle_slugs = [s for s, _ in mosyle_orgs]
+        abm_slug = abm if abm in abm_slugs else (
+            cfg.active_org if cfg.active_org in abm_slugs else abm_slugs[0])
+        mosyle_slug = mosyle if mosyle in mosyle_slugs else (
+            cfg.active_org if cfg.active_org in mosyle_slugs else mosyle_slugs[0])
+        return apple_orgs, mosyle_orgs, abm_slug, mosyle_slug
+
+    def _reconcile(abm_slug: str, mosyle_slug: str) -> dict:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_abm = pool.submit(cached_for, abm_slug, "devices", lambda c: c.devices())
+            f_mosyle = pool.submit(cached_for, mosyle_slug, "devices", lambda c: c.devices())
+            return reconcile_enrollments(f_abm.result(), f_mosyle.result())
+
+    @app.get("/reports/reconciliation", response_class=HTMLResponse)
+    def reconciliation_page(request: Request, abm: str = "", mosyle: str = ""):
+        cfg = config.load()
+        pair = _reconciliation_pair(cfg, abm, mosyle)
+        if pair is None:
+            return render(request, "reconciliation.html", active="reconciliation",
+                          report=None, apple_orgs=_orgs_by_provider(cfg, "apple"),
+                          mosyle_orgs=_orgs_by_provider(cfg, "mosyle"),
+                          abm_slug="", mosyle_slug="", abm_name="", mosyle_name="")
+        apple_orgs, mosyle_orgs, abm_slug, mosyle_slug = pair
+        report = _reconcile(abm_slug, mosyle_slug)
+        return render(request, "reconciliation.html", active="reconciliation",
+                      report=report, apple_orgs=apple_orgs, mosyle_orgs=mosyle_orgs,
+                      abm_slug=abm_slug, mosyle_slug=mosyle_slug,
+                      abm_name=dict(apple_orgs)[abm_slug].name,
+                      mosyle_name=dict(mosyle_orgs)[mosyle_slug].name)
+
     # ---- exports ----------------------------------------------------------
 
     @app.get("/export/{resource}.csv")
-    def export_csv(resource: str, live: int = 0, days: int = 90, years: int = 4):
+    def export_csv(request: Request, resource: str, live: int = 0, days: int = 90,
+                   years: int = 4, abm: str = "", mosyle: str = ""):
         if resource == "applecare":
+            # ?live=1 costs one Apple call per device. A cross-origin <img>/GET
+            # must not be able to start that sweep; require a same-origin
+            # request (a real click from abapit's own pages).
+            if live and request.headers.get("sec-fetch-site") not in (None, "same-origin", "none"):
+                raise ApiError(403, "Live AppleCare export must be started from abapit itself.")
             return _applecare_csv(live=bool(live))
+        if resource == "reconciliation":
+            pair = _reconciliation_pair(config.load(), abm, mosyle)
+            if pair is None:
+                raise ApiError(404, "Configure both an Apple and a Mosyle org "
+                                    "to reconcile enrollment.")
+            _a, _m, abm_slug, mosyle_slug = pair
+            report = _reconcile(abm_slug, mosyle_slug)
+            rows = [{"type": "reconciliation", "id": row["serial"], "attributes": row}
+                    for bucket in ("abm_only", "both", "mosyle_only")
+                    for row in report[bucket]]
+            return _csv_response(items_to_csv(rows), "reconciliation.csv")
+        if resource == "mosyle-os-breakdown":
+            guard("mosyle_os_breakdown")
+            report = mosyle_os_breakdown(cached("devices", lambda c: c.devices()))
+            rows = [{"type": "osVersion", "id": version,
+                     "attributes": {"osVersion": version, "count": count, "percent": pct}}
+                    for version, count, pct in report["rows"]]
+            return _csv_response(items_to_csv(rows), "mosyle-os-breakdown.csv")
+        if resource == "mosyle-stale":
+            guard("mosyle_stale")
+            days = max(1, min(days, 365))
+            report = mosyle_stale_devices(cached("devices", lambda c: c.devices()), days)
+            rows = [{"type": "stale", "id": row["serial"], "attributes": row}
+                    for row in report["rows"]]
+            return _csv_response(items_to_csv(rows), f"mosyle-stale-{days}d.csv")
         if resource == "refresh-candidates":
             guard("fleet_age")
             report = _fleet_age(max(1, min(years, 10)))
@@ -745,6 +1240,49 @@ def create_app(demo: bool = False,
             msg = f"Could not add org: {exc}"
         return RedirectResponse(f"/settings?msg={quote(msg)}", status_code=303)
 
+    @app.post("/settings/orgs/mosyle")
+    def settings_add_mosyle(name: str = Form(...), token: str = Form(""),
+                            email: str = Form(""), password: str = Form(""),
+                            logs_token: str = Form("")):
+        try:
+            config.add_org(name=name, provider="mosyle", mosyle_token=token.strip(),
+                           mosyle_email=email.strip(), mosyle_password=password,
+                           mosyle_logs_token=logs_token.strip())
+            msg = (f"Added Mosyle org {name!r}. Click Test to verify the "
+                   "credentials, then Use to switch to it.")
+        except ValueError as exc:
+            msg = f"Could not add Mosyle org: {exc}"
+        return RedirectResponse(f"/settings?msg={quote(msg)}", status_code=303)
+
+    @app.get("/settings/orgs/{slug}/edit", response_class=HTMLResponse)
+    def settings_edit_form(request: Request, slug: str):
+        org = config.load().orgs.get(slug)
+        if org is None:
+            return RedirectResponse(f"/settings?msg={quote('Org not found.')}", status_code=303)
+        return render(request, "org_edit.html", active="settings", slug=slug, eorg=org,
+                      suggested_roles=config.SUGGESTED_ROLES)
+
+    @app.post("/settings/orgs/{slug}/edit")
+    def settings_edit(slug: str, name: str = Form(""), role: str = Form(""),
+                      client_id: str = Form(""), key_id: str = Form(""),
+                      pem: str = Form(""), token: str = Form(""),
+                      email: str = Form(""), password: str = Form(""),
+                      logs_token: str = Form("")):
+        try:
+            config.edit_org(slug, name=name, role=role, client_id=client_id,
+                            key_id=key_id, private_key_pem=pem, mosyle_token=token,
+                            mosyle_email=email, mosyle_password=password,
+                            mosyle_logs_token=logs_token)
+            app.state.clients.pop(slug, None)  # rebuild the client with new creds
+            org = config.load().orgs.get(slug)
+            if org:  # drop cached data fetched under the old credentials
+                app.state.cache = {k: v for k, v in app.state.cache.items()
+                                   if k[0] != org.client_id}
+            msg = f"Updated {name or slug!r}. Click Test to verify."
+        except ValueError as exc:
+            msg = f"Could not update org: {exc}"
+        return RedirectResponse(f"/settings?msg={quote(msg)}", status_code=303)
+
     @app.post("/settings/orgs/{slug}/activate")
     def settings_activate(slug: str):
         config.set_active(slug)
@@ -771,8 +1309,9 @@ def create_app(demo: bool = False,
                     f"/settings?msg={quote('Org not found.')}", status_code=303)
             # Mint a fresh token: a role edited in ABM moments ago may not be
             # reflected in a cached bearer token.
-            token_cache.invalidate(org)
-            probe_client = ApiClient(org)
+            if org.provider == "apple":
+                token_cache.invalidate(org)
+            probe_client = build_client(org)
         results = probe_client.probe_capabilities()
         if not (app.state.demo and slug == "demo"):
             config.update_org_capabilities(
@@ -790,9 +1329,10 @@ def create_app(demo: bool = False,
             msg = "Org not found."
         else:
             try:
-                token_cache.invalidate(org)
-                probe = ApiClient(org)
-                probe.get("orgDevices", {"limit": 1})
+                if org.provider == "apple":
+                    token_cache.invalidate(org)
+                probe = build_client(org)
+                probe.ping()
                 probe.close()
                 msg = f"✅ {org.name}: authentication and device listing work."
             except (ApiError, AuthError, Exception) as exc:  # show, don't crash

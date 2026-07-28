@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block titletag %}Activity & Compliance · abapit{% endblock %}
+{% block title %}Activity &amp; Compliance <span class="muted">Mosyle Logs Stream</span>{% endblock %}
+{% block content %}
+
+{% if events is none %}
+<div class="panel">
+  <p class="muted">The Mosyle <strong>Logs Stream</strong> isn't configured for this org.
+  In Mosyle Business, go to <strong>Organization → Integrations → Mosyle Logs Stream</strong>,
+  enable it, choose the log types, and copy the access token — then add it to this org in
+  <a href="/settings">Settings</a>. It's a separate service from the device API.</p>
+</div>
+{% else %}
+
+<div class="flash">✓ Connected to Mosyle Logs Stream{% if enabled_types %} — streams on:
+  <strong>{{ enabled_types | join(', ') }}</strong>{% endif %}. {{ captured }} event(s)
+  captured so far; the stream drains on read, so new events accumulate here as they
+  occur. Trigger an admin action in Mosyle (or wait for a compliance change) to see one land.</div>
+
+<div class="cards">
+  <div class="card{% if non_compliant %} warn{% endif %}">
+    <div class="num">{{ non_compliant }}</div><div class="label">Compliance events lost</div></div>
+  <div class="card"><div class="num">{{ counts.get('zero_trust', 0) }}</div><div class="label">Zero-trust events</div></div>
+  <div class="card"><div class="num">{{ counts.get('action', 0) }}</div><div class="label">Admin actions</div></div>
+</div>
+
+<form method="get" class="toolbar">
+  <label>Show
+    <select name="type" onchange="this.form.submit()">
+      <option value=""{% if not type %} selected{% endif %}>All events</option>
+      {% for key, label in [('compliance','Compliance'), ('zero_trust','Zero trust'), ('action','Admin actions'), ('dns','DNS'), ('av','Antivirus')] %}
+      <option value="{{ key }}"{% if key == type %} selected{% endif %}>{{ label }}{% if counts.get(key) %} ({{ counts.get(key) }}){% endif %}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <span class="muted">{{ total }} event(s)</span>
+</form>
+
+<div class="panels">
+  <section class="panel wide">
+    <input data-filter="#logs" type="search" placeholder="Filter…">
+    <table id="logs">
+      <thead><tr><th>When</th><th>Type</th><th>Event</th><th>Device</th><th>Who</th></tr></thead>
+      <tbody>
+      {% for e in events %}
+      <tr>
+        <td>{{ e.when | dtt }}</td>
+        <td><span class="badge">{{ e.kind }}</span></td>
+        <td>
+          {% if e.status %}<span class="pill {{ 'expired' if 'lost' in e.status|lower else '' }}">{{ e.status }}</span> {% endif %}
+          {{ e.label }}
+        </td>
+        <td>{{ e.device }}{% if e.serial %} <span class="muted mono">{{ e.serial }}</span>{% endif %}</td>
+        <td>{{ e.user }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">No events in this window.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if total > events | length %}<p class="muted">Showing first {{ events | length }} of {{ total }}.</p>{% endif %}
+  </section>
+</div>
+{% endif %}
+{% endblock %}

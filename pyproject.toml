@@ -8,7 +8,10 @@ version = "0.2.0"
 description = "Apple Business API Tool — a local web GUI for the Apple Business Manager and Apple School Manager APIs, built for Mac admins."
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.10"
+# 3.9 is the Python that ships with macOS (Command Line Tools); abapit runs
+# on it (no 3.10+ syntax/stdlib), so admins can install against the system
+# Python without adding a newer one.
+requires-python = ">=3.9"
 authors = [{ name = "abapit contributors" }]
 keywords = ["apple", "abm", "asm", "mdm", "macadmin", "apple-business-manager"]
 classifiers = [
@@ -17,6 +20,10 @@ classifiers = [
     "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
@@ -29,7 +36,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.6", "bandit>=1.7"]
 
 [project.scripts]
 abapit = "abapit.cli:main"
@@ -39,3 +46,15 @@ Homepage = "https://github.com/goetchstone/abapit"
 
 [tool.hatch.build.targets.wheel]
 packages = ["abapit"]
+
+# Deliberately narrow: real errors (undefined names, syntax), dead imports, and
+# import order. Style rules that fight this codebase's intentional choices —
+# broad `except` for "show the user, don't crash", unchecked `subprocess.run`
+# for best-effort launchctl calls — are left out on purpose. A linter that
+# cries wolf gets ignored, which defeats the point of having one.
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

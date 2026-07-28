@@ -53,10 +53,25 @@ class Org:
     role: str = ""  # the API account's ABM/ASM role — bookkeeping only
     capabilities: dict = field(default_factory=dict)  # section -> probe status
     probed_at: str = ""
+    # "apple" (Business/School Manager) or "mosyle" (Mosyle Business MDM).
+    # The Apple credential fields above are unused for mosyle orgs. Mosyle's
+    # JWT auth needs the API access token PLUS an admin email/password, which
+    # are exchanged at /login for a 24h Bearer token (Basic auth is deprecated).
+    provider: str = "apple"
+    mosyle_token: str = ""
+    mosyle_email: str = ""
+    mosyle_password: str = ""
+    # Mosyle Logs Stream is a SEPARATE service (businessapilogs.mosyle.com) with
+    # its own access token, enabled under Organization > Integrations. Optional.
+    mosyle_logs_token: str = ""
 
     @property
     def issuer(self) -> str:
         return self.team_id or self.client_id
+
+    @property
+    def is_mosyle(self) -> bool:
+        return self.provider == "mosyle"
 
     def denied_sections(self) -> set:
         return {section for section, status in self.capabilities.items()
@@ -76,6 +91,11 @@ class Org:
             "role": self.role,
             "capabilities": self.capabilities,
             "probed_at": self.probed_at,
+            "provider": self.provider,
+            "mosyle_token": self.mosyle_token,
+            "mosyle_email": self.mosyle_email,
+            "mosyle_password": self.mosyle_password,
+            "mosyle_logs_token": self.mosyle_logs_token,
         }
 
 
@@ -123,7 +143,11 @@ def normalize_private_key(pem: str) -> str:
     Returns a canonical PKCS#8 PEM, or raises ValueError if unusable.
     """
     from cryptography.hazmat.primitives.serialization import (
-        Encoding, NoEncryption, PrivateFormat, load_pem_private_key)
+        Encoding,
+        NoEncryption,
+        PrivateFormat,
+        load_pem_private_key,
+    )
 
     text = pem.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
     candidates = [text]
@@ -168,19 +192,90 @@ def update_org_capabilities(slug: str, capabilities: dict) -> None:
     save(cfg)
 
 
+def _unique_slug(cfg: Config, name: str) -> str:
+    slug = slugify(name)
+    base, n = slug, 2
+    while slug in cfg.orgs:
+        slug = f"{base}-{n}"
+        n += 1
+    return slug
+
+
+def _assert_unique_client_id(cfg: Config, client_id: str) -> None:
+    """The client_id keys the token cache, the request cache, and snapshot
+    history — so two orgs sharing one would silently cross-contaminate each
+    other's data. Reject a duplicate at add time (e.g. the same ABM API
+    account pasted twice, or an Apple org set to a Mosyle org's id)."""
+    if any(org.client_id == client_id for org in cfg.orgs.values()):
+        raise ValueError(
+            f"client ID {client_id!r} is already used by another org. Each "
+            "org needs a distinct client ID — it keys the token cache, the "
+            "request cache, and snapshot history.")
+
+
+def edit_org(slug: str, **fields) -> None:
+    """Update an existing org's editable fields in place. Blank token/key/
+    password values are treated as 'keep current'; other fields are set to
+    what's submitted (the edit form pre-fills them, so blanks are intentional)."""
+    cfg = load()
+    org = cfg.orgs.get(slug)
+    if org is None:
+        raise ValueError(f"no org named {slug!r}")
+    if fields.get("name"):
+        org.name = fields["name"].strip()
+    if fields.get("role") is not None:
+        org.role = fields["role"].strip()
+    if org.provider == "mosyle":
+        if fields.get("mosyle_token", "").strip():
+            org.mosyle_token = fields["mosyle_token"].strip()
+        if fields.get("mosyle_email") is not None:
+            org.mosyle_email = fields["mosyle_email"].strip()
+        if fields.get("mosyle_password"):  # blank = keep current
+            org.mosyle_password = fields["mosyle_password"]
+        # Secrets are never rendered back into the edit form, so a blank field
+        # means "keep current" — never "clear it".
+        if fields.get("mosyle_logs_token", "").strip():
+            org.mosyle_logs_token = fields["mosyle_logs_token"].strip()
+    else:
+        client_id = fields.get("client_id", "").strip()
+        if client_id and client_id != org.client_id:
+            _assert_unique_client_id(cfg, client_id)
+            org.client_id = client_id
+        if fields.get("key_id", "").strip():
+            org.key_id = fields["key_id"].strip()
+        if fields.get("team_id") is not None:
+            org.team_id = fields["team_id"].strip()
+        if fields.get("private_key_pem", "").strip():
+            org.private_key_path = str(
+                save_private_key(slug, normalize_private_key(fields["private_key_pem"])))
+    save(cfg)
+
+
 def add_org(
     name: str,
-    scope: str,
-    client_id: str,
-    key_id: str,
+    scope: str = "business",
+    client_id: str = "",
+    key_id: str = "",
     private_key_pem: str = "",
     private_key_path: str = "",
     team_id: str = "",
     role: str = "",
+    provider: str = "apple",
+    mosyle_token: str = "",
+    mosyle_email: str = "",
+    mosyle_password: str = "",
+    mosyle_logs_token: str = "",
 ) -> str:
     """Add an org profile and make it active if it is the first one."""
+    if provider == "mosyle":
+        return _add_mosyle_org(name, mosyle_token, mosyle_email, mosyle_password,
+                               role, mosyle_logs_token)
+    if provider != "apple":
+        raise ValueError(f"provider must be 'apple' or 'mosyle', got {provider!r}")
     if scope not in ("business", "school"):
         raise ValueError(f"scope must be 'business' or 'school', got {scope!r}")
+    if not client_id or not key_id:
+        raise ValueError("client ID and key ID are required for an Apple org")
     if not private_key_pem and not private_key_path:
         raise ValueError("provide either a pasted private key or a path to one")
 
@@ -191,11 +286,8 @@ def add_org(
             raise ValueError(f"could not read key file: {exc}") from exc
 
     cfg = load()
-    slug = slugify(name)
-    base, n = slug, 2
-    while slug in cfg.orgs:
-        slug = f"{base}-{n}"
-        n += 1
+    _assert_unique_client_id(cfg, client_id.strip())
+    slug = _unique_slug(cfg, name)
 
     # Always store our own validated, normalized copy with 0600 perms.
     private_key_path = str(save_private_key(slug, normalize_private_key(private_key_pem)))
@@ -207,6 +299,38 @@ def add_org(
         key_id=key_id.strip(),
         private_key_path=private_key_path,
         team_id=team_id.strip(),
+        role=role.strip(),
+    )
+    if not cfg.active_org:
+        cfg.active_org = slug
+    save(cfg)
+    return slug
+
+
+def _add_mosyle_org(name: str, mosyle_token: str, mosyle_email: str = "",
+                    mosyle_password: str = "", role: str = "",
+                    mosyle_logs_token: str = "") -> str:
+    """Add a Mosyle Business org. No private key — the API access token from
+    Mosyle's API Integration profile, plus the admin email/password that
+    /login exchanges for a Bearer token. The client_id is synthetic (it only
+    needs to be stable and unique, since it keys the cache and history)."""
+    if not mosyle_token.strip():
+        raise ValueError("provide the Mosyle API access token")
+    cfg = load()
+    slug = _unique_slug(cfg, name)
+    client_id = f"mosyle.{slug}"
+    _assert_unique_client_id(cfg, client_id)  # guard against an Apple org squatting it
+    cfg.orgs[slug] = Org(
+        name=name,
+        scope="business",
+        provider="mosyle",
+        client_id=client_id,
+        key_id="",
+        private_key_path="",
+        mosyle_token=mosyle_token.strip(),
+        mosyle_email=mosyle_email.strip(),
+        mosyle_password=mosyle_password,
+        mosyle_logs_token=mosyle_logs_token.strip(),
         role=role.strip(),
     )
     if not cfg.active_org:

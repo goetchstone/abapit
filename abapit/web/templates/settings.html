@@ -16,14 +16,14 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
     <h2>Organizations</h2>
     {% if orgs %}
     <table>
-      <thead><tr><th></th><th>Name</th><th>Role</th><th>Scope</th><th>Client ID</th><th>Key access</th><th></th></tr></thead>
+      <thead><tr><th></th><th>Name</th><th>Role</th><th>Type</th><th>Client ID</th><th>Key access</th><th></th></tr></thead>
       <tbody>
       {% for slug, o in orgs.items() %}
       <tr>
         <td>{% if slug == active_org %}<span class="pill active">active</span>{% endif %}</td>
         <td>{{ o.name }}</td>
         <td>{{ o.role or '—' }}</td>
-        <td>{{ o.scope }}</td>
+        <td>{{ 'Mosyle' if o.provider == 'mosyle' else o.scope }}</td>
         <td><code>{{ o.client_id[:24] }}{% if o.client_id | length > 24 %}…{% endif %}</code></td>
         <td>{% if o.probed_at %}{{ o.capabilities.values() | select('equalto', 'ok') | list | length }}/{{ o.capabilities | length }} allowed
             <span class="muted">({{ o.probed_at | dt }})</span>
@@ -32,6 +32,7 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
           {% if slug != active_org %}
           <form method="post" action="/settings/orgs/{{ slug }}/activate"><button class="btn small">Use</button></form>
           {% endif %}
+          <a class="btn small ghost" href="/settings/orgs/{{ slug }}/edit">Edit</a>
           <form method="post" action="/settings/orgs/{{ slug }}/test"><button class="btn small ghost">Test</button></form>
           <form method="post" action="/settings/orgs/{{ slug }}/probe"><button class="btn small ghost" title="Empirically check what this key's role allows">Permissions</button></form>
           <form method="post" action="/settings/orgs/{{ slug }}/delete"
@@ -76,6 +77,27 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
         <input name="key_path" placeholder="~/Downloads/abm_key.pem">
       </label>
       <div class="full"><button class="btn primary">Add org</button></div>
+    </form>
+  </section>
+
+  <section class="panel wide">
+    <h2>Add a Mosyle organization</h2>
+    <p class="muted">In Mosyle Business: <strong>Organization → API Integration</strong>
+    → enable the profile and copy its access token. Mosyle's JWT auth also needs
+    an admin email + password (exchanged at <code>/login</code> for a 24-hour
+    token; Basic auth is deprecated). abapit reads device inventory only —
+    no private key needed.</p>
+    <form method="post" action="/settings/orgs/mosyle" class="form-grid">
+      <label>Display name <input name="name" required placeholder="Acme (Mosyle)"></label>
+      <label class="full">API access token
+        <input name="token" required placeholder="access token from Organization → API Integration">
+      </label>
+      <label>Admin email <input name="email" type="email" required placeholder="admin@acme.com"></label>
+      <label>Admin password <input name="password" type="password" required placeholder="••••••••"></label>
+      <label class="full">Logs Stream access token <span class="muted">(optional — enables the Activity &amp; Compliance feed; from Organization → Integrations → Mosyle Logs Stream)</span>
+        <input name="logs_token" placeholder="leave blank if you don't use Logs Stream">
+      </label>
+      <div class="full"><button class="btn primary">Add Mosyle org</button></div>
     </form>
   </section>
 </div>

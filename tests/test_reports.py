@@ -78,3 +78,134 @@ def test_coverage_report_buckets():
     assert report["expiring"][0]["days_left"] == 5
     assert {d["id"] for d in report["uncovered"]} == {"D3", "D4"}
     assert report["covered_count"] == 3  # D1, D2, D6 (no-end counts as covered)
+
+
+# ---- Mosyle reconciliation + posture ----------------------------------------
+
+def _abm(serial, status="ASSIGNED", family="Mac", model="MacBook Air"):
+    return {"type": "orgDevices", "id": serial, "attributes": {
+        "serialNumber": serial, "status": status, "productFamily": family,
+        "deviceModel": model, "addedToOrgDateTime": "2025-01-01T00:00:00Z"}}
+
+
+def _mos(serial, os_version="15.5", checkin_days=1, user="sarah@acme.com",
+         family="Mac", model="MacBook Air"):
+    checkin = ((NOW - timedelta(days=checkin_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+               if checkin_days is not None else None)
+    return {"type": "orgDevices", "id": serial, "attributes": {
+        "serialNumber": serial, "status": "active", "productFamily": family,
+        "deviceModel": model, "osVersion": os_version, "lastCheckIn": checkin,
+        "currentUser": user, "managedBy": "Mosyle"}}
+
+
+def test_reconcile_enrollments_buckets_and_normalization():
+    from abapit.reports import reconcile_enrollments
+    abm = [_abm("A1"), _abm("A2"), _abm("B")]
+    # ' a1 ' proves .strip().upper() join; C is Mosyle-only.
+    mosyle = [_mos(" a1 "), _mos("C")]
+    report = reconcile_enrollments(abm, mosyle)
+
+    assert [r["serial"] for r in report["both"]] == ["A1"]
+    assert {r["serial"] for r in report["abm_only"]} == {"A2", "B"}
+    assert [r["serial"] for r in report["mosyle_only"]] == ["C"]
+    assert report["summary"]["total_unique"] == 4
+    assert report["summary"]["both_count"] == 1
+    assert report["summary"]["enrollment_rate"] == 25.0  # 1 of 4 known serials
+
+
+def test_reconcile_both_row_merges_abm_ownership_and_mosyle_posture():
+    from abapit.reports import reconcile_enrollments
+    abm = [_abm("A1", status="ASSIGNED", family="Mac")]
+    mosyle = [_mos("A1", os_version="15.5", user="sarah@acme.com")]
+    row = reconcile_enrollments(abm, mosyle)["both"][0]
+    assert row["abm_status"] == "ASSIGNED"        # ABM-preferred ownership
+    assert row["productFamily"] == "Mac"
+    assert row["addedToOrgDateTime"] == "2025-01-01T00:00:00Z"
+    assert row["osVersion"] == "15.5"             # Mosyle-preferred posture
+    assert row["currentUser"] == "sarah@acme.com"
+    assert row["mosyle_status"] == "active"
+
+
+def test_reconcile_skips_blank_serials_and_dedups():
+    from abapit.reports import reconcile_enrollments
+    abm = [_abm("A1"), {"type": "orgDevices", "id": "", "attributes": {}},
+           _abm("a1")]  # duplicate normalized serial collapses
+    report = reconcile_enrollments(abm, [_mos("A1")])
+    assert len(report["both"]) == 1
+    assert report["summary"]["total_abm"] == 1  # blank skipped, dup collapsed
+
+
+def test_reconcile_csv_flatten_is_injection_safe():
+    from abapit.reports import items_to_csv, reconcile_enrollments
+    abm = [_abm("A1", model="=HYPERLINK(\"http://evil\")")]
+    report = reconcile_enrollments(abm, [])
+    rows = [{"type": "reconciliation", "id": r["serial"], "attributes": r}
+            for r in report["abm_only"]]
+    assert "'=HYPERLINK" in items_to_csv(rows)
+
+
+def test_mosyle_os_breakdown_sorted_unknown_last():
+    from abapit.reports import mosyle_os_breakdown
+    devices = [_mos("A", os_version="17.6"), _mos("B", os_version="17.6"),
+               _mos("C", os_version="18.0"),
+               {"type": "orgDevices", "id": "D", "attributes": {}}]  # no osVersion
+    report = mosyle_os_breakdown(devices)
+    versions = [v for v, _, _ in report["rows"]]
+    assert versions[0] == "17.6"          # most common first
+    assert versions[-1] == "Unknown"      # missing bucket sorts last
+    assert report["max_count"] == 2
+    assert report["total"] == 4
+    assert round(sum(p for _, _, p in report["rows"])) == 100
+
+
+def test_parse_iso_coerces_naive_to_utc():
+    from abapit.reports import parse_iso
+    # Mosyle can return a date-only or tz-less string; it must come back aware
+    # so arithmetic against tz-aware "now" never throws (the fmt_ago crash).
+    assert parse_iso("2025-01-01T12:00:00").tzinfo is timezone.utc
+    assert parse_iso("2025-06-10").tzinfo is timezone.utc
+    assert parse_iso("2025-06-10T12:00:00Z").utcoffset() == timedelta(0)
+    # arithmetic that previously raised now works
+    (datetime.now(timezone.utc) - parse_iso("2025-01-01")).total_seconds()
+
+
+def test_device_timeline_merges_sources_reverse_chronological():
+    from abapit.reports import device_timeline
+    abm = {"orderDateTime": "2025-01-01T00:00:00Z",
+           "addedToOrgDateTime": "2025-01-08T00:00:00Z"}
+    mosyle = {"enrolledAt": "2025-01-09T00:00:00Z",
+              "lastCheckIn": "2025-06-01T12:00:00Z"}
+    audit = [{"attributes": {"eventDateTime": "2025-02-01T00:00:00Z",
+                             "type": "DEVICE_ASSIGNED_TO_MDM", "outcome": "SUCCESS"}}]
+    timeline = device_timeline(abm, mosyle, audit)
+    whens = [i["when"] for i in timeline]
+    assert whens == sorted(whens, reverse=True)          # newest first
+    assert timeline[0]["label"] == "Last seen (heartbeat)"  # the June check-in
+    sources = {i["source"] for i in timeline}
+    assert sources == {"ABM", "Mosyle"}
+    assert any("Device Assigned To Mdm" in i["label"] for i in timeline)  # audit titled
+    # Missing/empty timestamps are dropped, not rendered blank.
+    assert device_timeline(None, None, None) == []
+    assert all(i["when"] for i in timeline)
+
+
+def test_mosyle_stale_devices_threshold_and_never():
+    from abapit.reports import mosyle_stale_devices
+    devices = [_mos("FRESH", checkin_days=2), _mos("OLD", checkin_days=40),
+               _mos("ANCIENT", checkin_days=100), _mos("NEVER", checkin_days=None)]
+    report = mosyle_stale_devices(devices, days=30, now=NOW)
+    serials = [r["serial"] for r in report["rows"]]
+    assert "FRESH" not in serials                 # within threshold, excluded
+    assert serials[0] == "NEVER"                  # never-checked-in sorts stalest
+    assert serials[1:] == ["ANCIENT", "OLD"]      # then by days descending
+    assert report["never_count"] == 1
+    assert report["stale_count"] == 3
+    assert report["rows"][0]["days_stale"] is None
+
+
+def test_csv_header_row_is_also_injection_safe():
+    from abapit.reports import items_to_csv
+    # Mosyle passes unmapped API keys straight through as attribute names, so a
+    # hostile key becomes a CSV *header* cell.
+    body = items_to_csv([{"type": "x", "id": "1", "attributes": {"=cmd|calc": "ok"}}])
+    assert "'=cmd|calc" in body.splitlines()[0]

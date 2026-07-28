@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block titletag %}ABM ↔ Mosyle · abapit{% endblock %}
+{% block title %}ABM ↔ Mosyle Reconciliation{% endblock %}
+{% block content %}
+
+{% if report is none %}
+<div class="panel">
+  <p class="muted">Reconciliation compares the devices an Apple Business Manager
+  org <em>owns</em> against the devices a Mosyle org actually <em>manages</em> —
+  surfacing the gap neither tool shows alone. Configure <strong>both</strong> an
+  Apple org and a Mosyle org in <a href="/settings">Settings</a> to enable it.</p>
+</div>
+{% else %}
+
+<form method="get" class="toolbar">
+  <label>Apple org
+    <select name="abm" onchange="this.form.submit()">
+      {% for slug, o in apple_orgs %}
+      <option value="{{ slug }}"{% if slug == abm_slug %} selected{% endif %}>{{ o.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Mosyle org
+    <select name="mosyle" onchange="this.form.submit()">
+      {% for slug, o in mosyle_orgs %}
+      <option value="{{ slug }}"{% if slug == mosyle_slug %} selected{% endif %}>{{ o.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <a class="btn ghost" href="/export/reconciliation.csv?abm={{ abm_slug }}&amp;mosyle={{ mosyle_slug }}">Export CSV</a>
+</form>
+
+<p class="muted">Comparing ABM <strong>{{ abm_name }}</strong> ↔ Mosyle
+<strong>{{ mosyle_name }}</strong>, joined by serial number.</p>
+
+<div class="cards">
+  <div class="card"><div class="num">{{ report.summary.enrollment_rate }}%</div>
+    <div class="label">Of all known serials, managed in Mosyle</div></div>
+  <div class="card{% if report.summary.abm_only_count %} warn{% endif %}">
+    <div class="num">{{ report.summary.abm_only_count }}</div>
+    <div class="label">In ABM, not enrolled in Mosyle</div>
+  </div>
+  <div class="card{% if report.summary.mosyle_only_count %} warn{% endif %}">
+    <div class="num">{{ report.summary.mosyle_only_count }}</div>
+    <div class="label">In Mosyle, unknown to ABM</div>
+  </div>
+  <div class="card"><div class="num">{{ report.summary.both_count }}</div>
+    <div class="label">In both (owned &amp; managed)</div></div>
+</div>
+
+<div class="panels">
+  <section class="panel wide">
+    <h2>In ABM, not enrolled in Mosyle <span class="count">{{ report.abm_only | length }}</span></h2>
+    <p class="muted">Owned in Apple Business Manager but not managed by this Mosyle tenant — the unmanaged-asset gap.</p>
+    <input data-filter="#abm-only" type="search" placeholder="Filter…">
+    <table id="abm-only">
+      <thead><tr><th>Serial</th><th>Model</th><th>Family</th><th>ABM status</th><th>Added to ABM</th></tr></thead>
+      <tbody>
+      {% for r in report.abm_only[:500] %}
+      <tr>
+        <td>{{ r.serial }}</td>
+        <td>{{ r.deviceModel }}</td>
+        <td>{{ r.productFamily }}</td>
+        <td><span class="pill {{ r.abm_status | lower }}">{{ r.abm_status }}</span></td>
+        <td>{{ r.addedToOrgDateTime | dt }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">Every ABM device is enrolled in Mosyle. 🎉</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if report.abm_only | length > 500 %}<p class="muted">Showing first 500 — the CSV has everything.</p>{% endif %}
+  </section>
+
+  <section class="panel wide">
+    <h2>In Mosyle, unknown to ABM <span class="count">{{ report.mosyle_only | length }}</span></h2>
+    <p class="muted">Enrolled in Mosyle but not in this ABM org — bought outside ABM, or not yet synced.</p>
+    <input data-filter="#mosyle-only" type="search" placeholder="Filter…">
+    <table id="mosyle-only">
+      <thead><tr><th>Serial</th><th>Model</th><th>Family</th><th>OS</th><th>Last check-in</th><th>User</th></tr></thead>
+      <tbody>
+      {% for r in report.mosyle_only[:500] %}
+      <tr>
+        <td>{{ r.serial }}</td>
+        <td>{{ r.deviceModel }}</td>
+        <td>{{ r.productFamily }}</td>
+        <td>{{ r.osVersion }}</td>
+        <td>{{ r.lastCheckIn | dtt }}</td>
+        <td>{{ r.currentUser }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="muted">Every Mosyle device is known to ABM.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if report.mosyle_only | length > 500 %}<p class="muted">Showing first 500 — the CSV has everything.</p>{% endif %}
+  </section>
+
+  <section class="panel wide">
+    <h2>In both — owned &amp; managed <span class="count">{{ report.both | length }}</span></h2>
+    <input data-filter="#both" type="search" placeholder="Filter…">
+    <table id="both">
+      <thead><tr><th>Serial</th><th>Model</th><th>ABM status</th><th>OS</th><th>Last check-in</th><th>User</th></tr></thead>
+      <tbody>
+      {% for r in report.both[:500] %}
+      <tr>
+        <td>{{ r.serial }}</td>
+        <td>{{ r.deviceModel }}</td>
+        <td><span class="pill {{ r.abm_status | lower }}">{{ r.abm_status }}</span></td>
+        <td>{{ r.osVersion }}</td>
+        <td>{{ r.lastCheckIn | dtt }}</td>
+        <td>{{ r.currentUser }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="muted">No devices appear in both orgs.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if report.both | length > 500 %}<p class="muted">Showing first 500 — the CSV has everything.</p>{% endif %}
+  </section>
+</div>
+{% endif %}
+{% endblock %}

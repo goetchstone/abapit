@@ -208,6 +208,16 @@ class DemoClient:
                 "updatedDateTime": _iso(now - timedelta(days=rng.randrange(0, 60))),
             }})
 
+        self._org_units, self._org_unit_members = [], {}
+        for i, ouname in enumerate(["Headquarters", "Warehouse", "Retail"]):
+            ouid = f"demo-ou-{i}"
+            members = [u["id"] for u in self._users if rng.random() < 0.4]
+            self._org_unit_members[ouid] = members
+            self._org_units.append({"type": "orgUnits", "id": ouid, "attributes": {
+                "name": ouname, "totalUserCount": len(members),
+                "createdDateTime": _iso(now - timedelta(days=500)),
+            }})
+
         self._apps = [{"type": "apps", "id": f"demo-app-{i}", "attributes": {
             "name": name, "bundleId": bundle, "supportedOS": [oses],
             "version": f"{rng.randrange(1, 30)}.{rng.randrange(10)}.{rng.randrange(10)}",
@@ -245,6 +255,18 @@ class DemoClient:
                        + rng.sample(self._packages, 1))
             for bp in self._blueprints
         }
+        # Per-relationship member sets (mutable — the write flow adds/removes).
+        self._blueprint_rel: dict[str, dict[str, set]] = {}
+        for bp in self._blueprints:
+            inc = self._blueprint_includes[bp["id"]]
+            self._blueprint_rel[bp["id"]] = {
+                "apps": {a["id"] for a in inc if a["type"] == "apps"},
+                "configurations": {a["id"] for a in inc if a["type"] == "configurations"},
+                "packages": {a["id"] for a in inc if a["type"] == "packages"},
+                "userGroups": {g["id"] for g in rng.sample(self._groups, 2)},
+                "devices": {d["id"] for d in rng.sample(self._devices, 5)},
+                "users": {u["id"] for u in rng.sample(self._users, 3)},
+            }
 
         self._audit_events = []
         for i in range(40):
@@ -312,6 +334,15 @@ class DemoClient:
     def user_group_member_ids(self, group_id: str) -> list[str]:
         return self._group_members.get(group_id, [])
 
+    def org_units(self) -> list[dict]:
+        return self._org_units
+
+    def org_unit(self, org_unit_id: str) -> dict:
+        return next((o for o in self._org_units if o["id"] == org_unit_id), {})
+
+    def org_unit_user_ids(self, org_unit_id: str) -> list[str]:
+        return self._org_unit_members.get(org_unit_id, [])
+
     def apps(self) -> list[dict]:
         return self._apps
 
@@ -324,6 +355,47 @@ class DemoClient:
     def blueprint(self, blueprint_id: str, include: str = "") -> dict:
         data = next((b for b in self._blueprints if b["id"] == blueprint_id), {})
         return {"data": data, "included": self._blueprint_includes.get(blueprint_id, [])}
+
+    def create_blueprint(self, attrs: dict) -> dict:
+        self._blueprint_seq = getattr(self, "_blueprint_seq", len(self._blueprints))
+        self._blueprint_seq += 1
+        bp_id = f"demo-blueprint-{self._blueprint_seq}"
+        now = _iso(datetime.now(timezone.utc))
+        item = {"type": "blueprints", "id": bp_id, "attributes": {
+            "name": attrs.get("name", "Untitled"),
+            "description": attrs.get("description", ""),
+            "status": "ACTIVE", "appLicenseDeficient": False,
+            "createdDateTime": now, "updatedDateTime": now}}
+        self._blueprints.append(item)
+        self._blueprint_includes[bp_id] = []
+        self._blueprint_rel[bp_id] = {rel: set() for rel in
+                                      ("apps", "configurations", "packages",
+                                       "userGroups", "devices", "users")}
+        return item
+
+    def update_blueprint(self, blueprint_id: str, attrs: dict) -> dict:
+        item = next((b for b in self._blueprints if b["id"] == blueprint_id), None)
+        if item is None:
+            return {}
+        item["attributes"].update({k: v for k, v in attrs.items() if v is not None})
+        item["attributes"]["updatedDateTime"] = _iso(datetime.now(timezone.utc))
+        return item
+
+    def delete_blueprint(self, blueprint_id: str) -> None:
+        self._blueprints = [b for b in self._blueprints if b["id"] != blueprint_id]
+        self._blueprint_includes.pop(blueprint_id, None)
+        self._blueprint_rel.pop(blueprint_id, None)
+
+    def blueprint_relationship_ids(self, blueprint_id: str, rel: str) -> list[str]:
+        return sorted(self._blueprint_rel.get(blueprint_id, {}).get(rel, set()))
+
+    def add_blueprint_relationship(self, blueprint_id: str, rel: str, ids: list[str]) -> dict:
+        self._blueprint_rel.setdefault(blueprint_id, {}).setdefault(rel, set()).update(ids)
+        return {}
+
+    def remove_blueprint_relationship(self, blueprint_id: str, rel: str, ids: list[str]) -> dict:
+        self._blueprint_rel.setdefault(blueprint_id, {}).setdefault(rel, set()).difference_update(ids)
+        return {}
 
     def configurations(self) -> list[dict]:
         return self._configurations
@@ -390,7 +462,12 @@ class DemoClient:
                    for section, label, _, _, _ in ApiClient.READ_PROBES]
         results.append({"section": "assign", "capability": "Device assignment",
                         "kind": "write", "status": "ok"})
+        results += [{"section": section, "capability": label, "kind": "write",
+                     "status": "ok"} for section, label, _ in ApiClient.WRITE_PROBES]
         return results
+
+    def ping(self) -> None:
+        pass
 
     def close(self) -> None:
         pass

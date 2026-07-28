@@ -24,12 +24,15 @@ from .assign import plan as plan_assignment
 from .auth import AuthError, request_access_token
 from .client import ApiError
 
+LOCAL_HOSTS_CLI = ("127.0.0.1", "localhost", "::1")
+
 EXPORT_RESOURCES = {
     "devices": "devices",
     "mdm-servers": "mdm_servers",
     "mdm-enrolled": "mdm_enrolled_devices",
     "users": "users",
     "user-groups": "user_groups",
+    "device-groups": "device_groups",
     "apps": "apps",
     "packages": "packages",
     "blueprints": "blueprints",
@@ -47,17 +50,30 @@ def _client(args):
     if org is None:
         sys.exit("No org configured. Run `abapit serve` and add one in Settings, "
                  "or use --demo for fake data.")
-    from .client import ApiClient
-    return ApiClient(org)
+    from .factory import build_client
+    return build_client(org)
 
 
 def cmd_serve(args) -> None:
     import uvicorn
+
     from .web.app import create_app
 
-    # Host-header protection can only enumerate hosts we know; if the user
-    # deliberately binds wide, disable it (they get the warning below).
-    allowed_hosts = None if args.host in ("127.0.0.1", "localhost") else ["*"]
+    # Host-header protection can only enumerate hosts we know. Binding wide
+    # used to pass ["*"], which disabled the Host check entirely and re-opened
+    # DNS rebinding; instead build a concrete allowlist from the bind address
+    # and this machine's names, so the check keeps working off-localhost.
+    if args.host in ("127.0.0.1", "localhost"):
+        allowed_hosts = None  # create_app() defaults to the loopback names
+    else:
+        import socket
+        names = {args.host, socket.gethostname(), f"{socket.gethostname()}.local",
+                 *LOCAL_HOSTS_CLI}
+        try:
+            names.add(socket.gethostbyname(socket.gethostname()))
+        except OSError:
+            pass
+        allowed_hosts = sorted(n for n in names if n)
     app = create_app(demo=args.demo, allowed_hosts=allowed_hosts)
     url = f"http://{args.host}:{args.port}"
     if not args.no_browser:
@@ -138,8 +154,8 @@ def cmd_assign(args) -> None:
     client = _client(args)
     serial_text = " ".join(args.serial)
     if args.file:
-        source = sys.stdin if args.file == "-" else open(args.file)
-        serial_text += " " + source.read()
+        serial_text += " " + (sys.stdin.read() if args.file == "-"
+                              else Path(args.file).read_text())
     if not serial_text.strip():
         sys.exit("No serials given — use --serial, or --file (use '-' for stdin).")
 
@@ -326,7 +342,8 @@ def cmd_orgs(args) -> None:
     for slug, org in cfg.orgs.items():
         marker = "*" if slug == cfg.active_org else " "
         role = f"  [{org.role}]" if org.role else ""
-        print(f"{marker} {slug:20s} {org.scope:8s} {org.name}{role}")
+        kind = "mosyle" if org.is_mosyle else org.scope
+        print(f"{marker} {slug:20s} {kind:8s} {org.name}{role}")
 
 
 def main(argv: list[str] | None = None) -> None:

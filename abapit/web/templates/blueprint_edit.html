@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% set editing = blueprint is not none %}
+{% block titletag %}{{ 'Edit blueprint' if editing else 'New blueprint' }} · abapit{% endblock %}
+{% block title %}<a class="crumb" href="/blueprints">Blueprints</a> /
+  {{ 'Edit ' ~ blueprint.attributes.get('name', blueprint.id) if editing else 'New blueprint' }}{% endblock %}
+{% block content %}
+
+{% if error %}<div class="flash stale">{{ error }}</div>{% endif %}
+
+<div class="panels">
+  <section class="panel wide">
+    <h2>{{ 'Blueprint details' if editing else 'Create a blueprint' }}</h2>
+    <p class="muted">A blueprint groups apps, configurations, and packages and
+    assigns them to devices and people. Membership is edited on the blueprint's
+    own page after saving.</p>
+    <form method="post"
+          action="{{ '/blueprints/' ~ blueprint.id ~ '/edit' if editing else '/blueprints' }}"
+          class="form-grid">
+      <label class="full">Name
+        <input name="name" required autocomplete="off"
+               value="{{ blueprint.attributes.get('name', '') if editing else '' }}">
+      </label>
+      <label class="full">Description
+        <textarea name="description" rows="3">{{ blueprint.attributes.get('description', '') if editing else '' }}</textarea>
+      </label>
+      <div class="full">
+        <button class="btn primary">{{ 'Save changes' if editing else 'Create blueprint' }}</button>
+        <a class="btn ghost" href="{{ '/blueprints/' ~ blueprint.id if editing else '/blueprints' }}">Cancel</a>
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}
