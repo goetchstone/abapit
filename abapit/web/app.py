@@ -943,8 +943,15 @@ def create_app(demo: bool = False,
         rels = []
         if _is_writable("blueprints_write"):  # skip heavy catalogs for read-only roles
             for rel in BP_RELS:
-                catalog = _bp_catalog(c, rel)
-                current = c.blueprint_relationship_ids(blueprint_id, rel)  # not cached: fresh after writes
+                try:
+                    catalog = _bp_catalog(c, rel)
+                    # not cached: must be fresh right after a write
+                    current = c.blueprint_relationship_ids(blueprint_id, rel)
+                except (ApiError, AuthError):
+                    # The role can't read this relationship (e.g. a Content
+                    # Manager 403s on users/userGroups). Omit just that panel
+                    # instead of failing the whole page.
+                    continue
                 rels.append({"key": rel, "title": BP_REL_TITLES[rel],
                              "current": [{"id": i, "label": catalog.get(i, i)} for i in current]})
         return render(request, "blueprint_detail.html", active="blueprints",

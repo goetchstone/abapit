@@ -358,7 +358,19 @@ class ApiClient:
 
     def blueprint(self, blueprint_id: str, include: str = "") -> dict:
         params = {"include": include} if include else None
-        return self.get(f"blueprints/{blueprint_id}", params)
+        try:
+            return self.get(f"blueprints/{blueprint_id}", params)
+        except ApiError as exc:
+            # Apple rejects the WHOLE request when the API account's role can't
+            # read one of the included relationships (a Content Manager role
+            # 403s on users/userGroups, and the blueprint fetch then 400s).
+            # The blueprint itself is readable, so fall back to the bare
+            # resource rather than failing the page.
+            if include and exc.status in (400, 403):
+                log.info("blueprint %s include=%s rejected (%d) — retrying without "
+                         "includes", blueprint_id, include, exc.status)
+                return self.get(f"blueprints/{blueprint_id}")
+            raise
 
     # -- generic JSON:API resource writes ------------------------------------
     # Same shape for every writable v2.0+ resource (blueprints, configurations,

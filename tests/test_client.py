@@ -156,6 +156,24 @@ def test_blueprint_orgdevices_relationship_path_and_type(org, fake_tokens):
     assert captured["body"] == {"data": [{"type": "orgDevices", "id": "S1"}]}
 
 
+def test_blueprint_include_falls_back_when_role_cant_read_a_relationship(org, fake_tokens):
+    """A Content Manager role 403s on users/userGroups, and Apple then rejects
+    the whole blueprint fetch with 400. The blueprint itself is readable, so we
+    retry without includes rather than failing the page."""
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if "include=" in str(request.url):
+            return httpx.Response(400, json={"errors": [{"title": "Bad Request"}]})
+        return httpx.Response(200, json={"data": {"type": "blueprints", "id": "BP1"}})
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    body = client.blueprint("BP1", include="apps,users,userGroups")
+    assert body["data"]["id"] == "BP1"        # page still renders
+    assert len(calls) == 2 and "include=" not in calls[1]
+
+
 def test_org_units_use_organizationalunits_path(org, fake_tokens):
     """The resource path is /v1/organizationalUnits — "orgUnits" 404s."""
     paths = []
