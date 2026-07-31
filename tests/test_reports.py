@@ -209,3 +209,29 @@ def test_csv_header_row_is_also_injection_safe():
     # hostile key becomes a CSV *header* cell.
     body = items_to_csv([{"type": "x", "id": "1", "attributes": {"=cmd|calc": "ok"}}])
     assert "'=cmd|calc" in body.splitlines()[0]
+
+
+def test_audit_digest_filters_sorts_and_counts():
+    from abapit.reports import DEVICE_LIFECYCLE_EVENTS, SUBSCRIPTION_EVENTS, audit_digest
+
+    def ev(kind, when):
+        return {"type": "auditEvents", "id": f"{kind}-{when}",
+                "attributes": {"type": kind, "eventDateTime": when}}
+
+    events = [
+        ev("SUBSCRIPTION_CREATED", "2026-06-01T00:00:00Z"),
+        ev("ACCOUNT_ADDED", "2026-06-02T00:00:00Z"),          # not in either set
+        ev("SUBJECT_HAS_ICLOUD_STORAGE_PURCHASE_ADDED", "2026-06-03T00:00:00Z"),
+        ev("DEVICE_ASSIGNED_TO_SERVER", "2026-06-04T00:00:00Z"),
+        ev("SUBSCRIPTION_CREATED", "2026-06-05T00:00:00Z"),
+    ]
+
+    subs = audit_digest(events, SUBSCRIPTION_EVENTS)
+    assert subs["total"] == 3 and subs["scanned"] == 5
+    whens = [e["attributes"]["eventDateTime"] for e in subs["rows"]]
+    assert whens == sorted(whens, reverse=True)            # newest first
+    assert dict(subs["counts"])["SUBSCRIPTION_CREATED"] == 2
+
+    life = audit_digest(events, DEVICE_LIFECYCLE_EVENTS)
+    assert [e["attributes"]["type"] for e in life["rows"]] == ["DEVICE_ASSIGNED_TO_SERVER"]
+    assert audit_digest([], SUBSCRIPTION_EVENTS)["total"] == 0

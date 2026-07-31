@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block titletag %}{{ title }} · abapit{% endblock %}
+{% block title %}{{ title }} <span class="count">{{ report.total }}</span>{% endblock %}
+{% block content %}
+
+<p class="muted">{{ blurb }}</p>
+
+<form method="get" class="toolbar">
+  <label>Last
+    <select name="days" onchange="this.form.submit()">
+      {% for d in (7, 30, 90, 365) %}
+      <option value="{{ d }}"{% if d == days %} selected{% endif %}>{{ d }} days</option>
+      {% endfor %}
+    </select>
+  </label>
+  <span class="muted">{{ report.total }} of {{ report.scanned }} audit event(s) in this window</span>
+</form>
+
+{% if report.counts %}
+<div class="cards">
+  {% for kind, count in report.counts %}
+  <div class="card">
+    <div class="num">{{ count }}</div>
+    <div class="label">{{ kind.replace('SUBJECT_HAS_', '').replace('_', ' ') | title }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="panels">
+  <section class="panel wide">
+    <input data-filter="#events" type="search" placeholder="Filter…">
+    <table id="events">
+      <thead><tr><th>When</th><th>Event</th><th>Subject</th><th>Actor</th><th>Outcome</th></tr></thead>
+      <tbody>
+      {% for e in rows %}
+      <tr>
+        <td>{{ e.attributes.get('eventDateTime') | dtt }}</td>
+        <td>{{ e.attributes.get('type', '').replace('_', ' ') | title }}</td>
+        <td>{{ e.attributes.get('subjectName') or e.attributes.get('subjectId', '—') }}
+          {% if e.attributes.get('subjectType') %}<span class="muted">({{ e.attributes.get('subjectType') | lower }})</span>{% endif %}</td>
+        <td>{{ e.attributes.get('actorName') or e.attributes.get('actorId', '—') }}</td>
+        <td>{{ e.attributes.get('outcome', '') }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">No matching events in the last {{ days }} days.
+        {% if report.scanned %}({{ report.scanned }} other audit event(s) in this window.){% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if report.total > rows | length %}
+    <p class="muted">Showing the {{ rows | length }} most recent of {{ report.total }}.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
