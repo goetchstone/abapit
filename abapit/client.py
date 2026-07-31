@@ -38,6 +38,10 @@ BUSINESS_SECTIONS = (
     "blueprints",
     "configurations",
     "audit_events",
+    # Views over audit events — they inherit the audit_events permission
+    # (render() drops them when that capability is denied).
+    "subscriptions",
+    "device_lifecycle",
     "changes",
     "coverage",
     "fleet_age",
@@ -228,7 +232,7 @@ class ApiClient:
     READ_PROBES = (
         # (section key, label, path, params, business_only)
         ("devices", "Devices", "orgDevices", {"limit": 1}, False),
-        ("mdm_servers", "MDM servers", "mdmServers", {"limit": 1}, False),
+        ("mdm_servers", "Device management services", "mdmServers", {"limit": 1}, False),
         ("mdm_enrolled", "Apple MDM enrolled", "mdmDevices", {"limit": 1}, True),
         ("users", "Users", "users", {"limit": 1}, True),
         ("user_groups", "User groups", "userGroups", {"limit": 1}, True),

@@ -32,7 +32,10 @@ from ..client import ApiError, sections_for
 from ..demo import DemoClient
 from ..factory import build_client
 from ..reports import (
+    DEVICE_LIFECYCLE_EVENTS,
+    SUBSCRIPTION_EVENTS,
     assignment_summary,
+    audit_digest,
     coverage_report,
     device_stats,
     device_timeline,
@@ -52,7 +55,7 @@ NAV = [
     ("Overview", [("dashboard", "/", "Dashboard")]),
     ("Devices", [
         ("devices", "/devices", "Devices"),
-        ("mdm_servers", "/mdm-servers", "MDM Servers"),
+        ("mdm_servers", "/mdm-servers", "Device Management Services"),
         ("mdm_enrolled", "/mdm-enrolled", "Apple MDM Enrolled"),
         ("device_groups", "/device-groups", "Device Groups"),
         ("assign", "/assign", "Assign to MDM"),
@@ -70,6 +73,8 @@ NAV = [
     ]),
     ("Activity", [
         ("audit_events", "/audit-events", "Audit Events"),
+        ("subscriptions", "/subscriptions", "Subscriptions & Purchases"),
+        ("device_lifecycle", "/device-lifecycle", "Device Lifecycle"),
         ("mosyle_logs", "/mosyle-activity", "Activity & Compliance"),
         ("changes", "/changes", "Changes"),
     ]),
@@ -112,7 +117,7 @@ _stale_ctx: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
 # section key -> (client method name, page title) for generic listings/exports
 RESOURCES = {
     "devices": ("devices", "Devices"),
-    "mdm-servers": ("mdm_servers", "MDM Servers"),
+    "mdm-servers": ("mdm_servers", "Device Management Services"),
     "mdm-enrolled": ("mdm_enrolled_devices", "Apple MDM Enrolled Devices"),
     "users": ("users", "Users"),
     "user-groups": ("user_groups", "User Groups"),
@@ -361,6 +366,11 @@ def create_app(demo: bool = False,
         # regardless of which one is currently active.
         if cfg and _has_both_providers(cfg):
             allowed.add("reconciliation")
+        # Subscriptions and Device Lifecycle are just filtered views over audit
+        # events, so they inherit that capability rather than having their own.
+        active_org_now = cfg.get_active() if cfg else None
+        if active_org_now and "audit_events" in active_org_now.denied_sections():
+            allowed -= {"subscriptions", "device_lifecycle"}
         nav = [(group, [item for item in items if item[0] in allowed or item[0] == "dashboard"])
                for group, items in NAV]
         nav = [(group, items) for group, items in nav if items]
@@ -1181,6 +1191,43 @@ def create_app(demo: bool = False,
         return render(request, "audit_events.html", active="audit_events",
                       events=events[:MAX_TABLE_ROWS], total=len(events),
                       start=start, end=end, type=type)
+
+    def _audit_view(request: Request, days: int, types, title: str,
+                    active: str, blurb: str):
+        """Shared renderer for the filtered audit-event views. Apple exposes no
+        subscription or device-lifecycle endpoints — these events are the only
+        place that activity surfaces, so both pages are one audit query each."""
+        guard("audit_events")
+        days = max(1, min(days, 365))
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=days)
+        events = cached(f"audit:{days}", lambda c: c.audit_events(
+            start.strftime("%Y-%m-%dT%H:%M:%SZ"), end.strftime("%Y-%m-%dT%H:%M:%SZ")))
+        report = audit_digest(events, types)
+        return render(request, "audit_view.html", active=active, title=title,
+                      blurb=blurb, report=report, days=days,
+                      rows=report["rows"][:MAX_TABLE_ROWS])
+
+    @app.get("/subscriptions", response_class=HTMLResponse)
+    def subscriptions_page(request: Request, days: int = 30):
+        return _audit_view(
+            request, days, SUBSCRIPTION_EVENTS, "Subscriptions & Purchases",
+            "subscriptions",
+            "Apple Business has no subscription endpoint — these audit events are "
+            "the only place it reports subscription and purchase activity. The "
+            "subject is the user the subscription belongs to. Assigning a "
+            "subscription is a web-portal action; the API can only observe it.")
+
+    @app.get("/device-lifecycle", response_class=HTMLResponse)
+    def device_lifecycle_page(request: Request, days: int = 30):
+        return _audit_view(
+            request, days, DEVICE_LIFECYCLE_EVENTS, "Device Lifecycle",
+            "device_lifecycle",
+            "Devices added to or removed from the org, assigned or unassigned "
+            "from a device management service, and erased. This is the poll "
+            "target for enrollment changes — Apple offers no webhooks. Note it "
+            "reports Apple Business assignment, not whether a third-party MDM "
+            "actually enrolled the device.")
 
     # ---- snapshots & changes ----------------------------------------------
 

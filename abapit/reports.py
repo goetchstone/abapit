@@ -169,6 +169,38 @@ def fleet_age_report(devices: list[dict], applecare_items: list[dict] | None,
     }
 
 
+# Audit-event groupings, from Apple's AuditEventType enum. Apple Business has
+# no subscription/lifecycle *endpoints* — these events are the only place the
+# API surfaces that activity, so these two views are the whole story.
+SUBSCRIPTION_EVENTS = (
+    "SUBSCRIPTION_CREATED",
+    "SUBSCRIPTION_UPDATED",
+    "SUBSCRIPTION_DELETED",
+    "SUBJECT_HAS_ICLOUD_STORAGE_PURCHASE_ADDED",
+    "SUBJECT_HAS_ICLOUD_STORAGE_PURCHASE_REMOVED",
+    "SUBJECT_HAS_APPLECARE_PURCHASE_ADDED",
+    "SUBJECT_HAS_APPLECARE_PURCHASE_REMOVED",
+)
+DEVICE_LIFECYCLE_EVENTS = (
+    "DEVICE_ADDED_TO_ORG",
+    "DEVICE_REMOVED_FROM_ORG",
+    "DEVICE_ASSIGNED_TO_SERVER",
+    "DEVICE_UNASSIGNED_FROM_SERVER",
+    "DEVICE_IS_ERASED",
+)
+
+
+def audit_digest(events: list[dict], types: tuple) -> dict:
+    """Filter audit events to a set of types, newest first, with per-type counts."""
+    wanted = set(types)
+    rows = [e for e in events if e.get("attributes", {}).get("type") in wanted]
+    rows.sort(key=lambda e: e.get("attributes", {}).get("eventDateTime") or "",
+              reverse=True)
+    counts: Counter = Counter(e["attributes"].get("type") for e in rows)
+    return {"rows": rows, "counts": counts.most_common(),
+            "total": len(rows), "scanned": len(events)}
+
+
 def _norm_serial(serial: str | None) -> str:
     """ABM serials are uppercase; Mosyle casing varies. Normalize for joins
     while callers keep the original for display."""
@@ -262,7 +294,7 @@ def device_timeline(abm_attrs: dict | None, mosyle_attrs: dict | None,
             items.append({"when": when, "kind": kind, "label": label, "source": source})
 
     add(abm.get("orderDateTime"), "ordered", "Ordered", "ABM")
-    add(abm.get("addedToOrgDateTime"), "added", "Added to Apple Business Manager", "ABM")
+    add(abm.get("addedToOrgDateTime"), "added", "Added to Apple Business", "ABM")
     for event in (audit_events or []):
         attrs = event.get("attributes", {})
         label = attrs.get("type", "event").replace("_", " ").title()

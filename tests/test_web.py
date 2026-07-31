@@ -387,3 +387,29 @@ def test_find_by_imei(web):
                   if d["attributes"].get("imei"))
     resp = web.get(f"/find?q={device['attributes']['imei']}")
     assert resp.headers["location"] == f"/devices/{device['id']}"
+
+
+def test_subscription_and_lifecycle_views_render(web):
+    for path in ("/subscriptions", "/device-lifecycle", "/subscriptions?days=90"):
+        assert web.get(path).status_code == 200, path
+    body = web.get("/subscriptions").content
+    assert b"no subscription endpoint" in body   # the honest explanation is shown
+
+
+def test_audit_views_inherit_audit_events_permission(tmp_path, monkeypatch, ec_key_pair):
+    """They're filtered views over audit events, so a role denied audit events
+    must not see them in the nav."""
+    monkeypatch.setenv("ABAPIT_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("ABAPIT_DATA_DIR", str(tmp_path / "data"))
+    key_path, _ = ec_key_pair
+    slug = config.add_org(name="No Audit", scope="business", client_id="BUSINESSAPI.na",
+                          key_id="k", private_key_path=str(key_path))
+    config.update_org_capabilities(slug, {"devices": "ok", "audit_events": "forbidden"})
+    import abapit.web.app as app_mod
+    monkeypatch.setattr(app_mod, "build_client",
+                        lambda org: StubFleet([_device("AAA")], org=org))
+    client = TestClient(create_app(), base_url="http://127.0.0.1",
+                        follow_redirects=False)
+    nav = client.get("/devices").content
+    assert b'href="/subscriptions"' not in nav
+    assert b'href="/device-lifecycle"' not in nav

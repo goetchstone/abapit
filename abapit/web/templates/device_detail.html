@@ -25,7 +25,7 @@ table.kv td:last-child{text-align:right}
     <span class="muted mono">{{ device_id }}</span></h2>
   {% if aattr and mattr %}<span class="pill success">Owned &amp; managed</span>
   {% elif mattr %}<span class="pill success">Managed in Mosyle</span>
-  {% else %}<span class="pill">In Apple Business Manager</span>{% endif %}
+  {% else %}<span class="pill">In Apple Business</span>{% endif %}
 </div>
 
 {% if mattr %}
@@ -43,7 +43,7 @@ table.kv td:last-child{text-align:right}
 <div class="panels">
   {% if aattr %}
   <section class="panel">
-    <h2>Apple Business Manager <span class="muted">owned</span></h2>
+    <h2>Apple Business <span class="muted">owned</span></h2>
     <table class="kv">
       <tr><td>Model</td><td>{{ aattr.deviceModel or '—' }}</td></tr>
       <tr><td>Family</td><td>{{ aattr.productFamily or '—' }}</td></tr>
@@ -123,7 +123,7 @@ table.kv td:last-child{text-align:right}
 
 <div class="panels">
   {% if aattr %}
-  <section class="panel wide"><details><summary>All Apple Business Manager attributes</summary>{{ attr_table(aattr) }}</details></section>
+  <section class="panel wide"><details><summary>All Apple Business attributes</summary>{{ attr_table(aattr) }}</details></section>
   {% endif %}
   {% if mattr %}
   <section class="panel wide"><details><summary>All Mosyle attributes</summary>{{ attr_table(mattr) }}</details></section>

@@ -52,13 +52,13 @@ Orgs added here will be used the next time you run <code>abapit serve</code> wit
 
   <section class="panel wide">
     <h2>Add an organization</h2>
-    <p class="muted">In Apple Business Manager (or Apple School Manager): <strong>Preferences → API</strong>,
+    <p class="muted">In Apple Business (or Apple School Manager): <strong>Preferences → API</strong>,
     create an API account, download the private key (.pem / .p8), and copy the Client ID and Key ID.</p>
     <form method="post" action="/settings/orgs" class="form-grid">
       <label>Display name <input name="name" required placeholder="Acme Corp"></label>
       <label>Type
         <select name="scope">
-          <option value="business">Apple Business Manager</option>
+          <option value="business">Apple Business</option>
           <option value="school">Apple School Manager</option>
         </select>
       </label>
