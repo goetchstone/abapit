@@ -11,7 +11,7 @@
   <section class="panel wide">
     <h2>{{ 'Service details' if editing else 'Create a device management service' }}</h2>
     <p class="muted">A device management service is the MDM that devices are
-    assigned to in Apple Business Manager. Devices are moved on the
+    assigned to in Apple Business. Devices are moved on the
     <a href="/assign">Assign to MDM</a> page, not here.</p>
 
     <form method="post"
@@ -34,7 +34,7 @@
                   placeholder="MIIDXTCCAkWgAwIBAgIJALx…">{{ cert_data | default('') }}</textarea>
       </label>
       <label class="full"><input type="checkbox" name="disown" value="1">
-        Allow this service to release devices from Apple Business Manager
+        Allow this service to release devices from Apple Business
         <span class="muted">(enableMdmDisownFlag)</span>
       </label>
       {% endif %}

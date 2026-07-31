@@ -262,7 +262,7 @@ def device_timeline(abm_attrs: dict | None, mosyle_attrs: dict | None,
             items.append({"when": when, "kind": kind, "label": label, "source": source})
 
     add(abm.get("orderDateTime"), "ordered", "Ordered", "ABM")
-    add(abm.get("addedToOrgDateTime"), "added", "Added to Apple Business Manager", "ABM")
+    add(abm.get("addedToOrgDateTime"), "added", "Added to Apple Business", "ABM")
     for event in (audit_events or []):
         attrs = event.get("attributes", {})
         label = attrs.get("type", "event").replace("_", " ").title()

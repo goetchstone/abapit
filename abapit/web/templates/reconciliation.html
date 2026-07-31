@@ -5,7 +5,7 @@
 
 {% if report is none %}
 <div class="panel">
-  <p class="muted">Reconciliation compares the devices an Apple Business Manager
+  <p class="muted">Reconciliation compares the devices an Apple Business
   org <em>owns</em> against the devices a Mosyle org actually <em>manages</em> —
   surfacing the gap neither tool shows alone. Configure <strong>both</strong> an
   Apple org and a Mosyle org in <a href="/settings">Settings</a> to enable it.</p>
@@ -51,7 +51,7 @@
 <div class="panels">
   <section class="panel wide">
     <h2>In ABM, not enrolled in Mosyle <span class="count">{{ report.abm_only | length }}</span></h2>
-    <p class="muted">Owned in Apple Business Manager but not managed by this Mosyle tenant — the unmanaged-asset gap.</p>
+    <p class="muted">Owned in Apple Business but not managed by this Mosyle tenant — the unmanaged-asset gap.</p>
     <input data-filter="#abm-only" type="search" placeholder="Filter…">
     <table id="abm-only">
       <thead><tr><th>Serial</th><th>Model</th><th>Family</th><th>ABM status</th><th>Added to ABM</th></tr></thead>

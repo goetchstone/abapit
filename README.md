@@ -1,6 +1,6 @@
 # abapit — the **A**pple **B**usiness **API** **T**ool
 
-A local web GUI (plus a small CLI) for the **Apple Business Manager** and
+A local web GUI (plus a small CLI) for the **Apple Business** and
 **Apple School Manager** APIs, built for Mac admins. Browse your device
 inventory, MDM server assignments, AppleCare coverage, users, groups, apps,
 blueprints, and audit events — organized by category, with dashboards and
@@ -90,7 +90,7 @@ org per hour.
 
 ## Connecting your real org
 
-1. In [Apple Business Manager](https://business.apple.com) (or Apple School
+1. In [Apple Business](https://business.apple.com) (or Apple School
    Manager), sign in as an Administrator and go to **your account name →
    Preferences → API**.
 2. Create an **API account** and download the **private key** (a `.pem` file —
@@ -226,7 +226,7 @@ profiles; switch from the header dropdown.
   key files — the same trust model as `~/.ssh`; secrets are not in the
   Keychain. The Apple API account can read inventory, reassign devices, and
   (with a permitted role) manage blueprints; revoke/rotate keys any time in
-  Apple Business Manager, and rotate the Mosyle token/password in Mosyle.
+  Apple Business, and rotate the Mosyle token/password in Mosyle.
 
 ## Notes & limits
 
