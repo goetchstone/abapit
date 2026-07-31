@@ -57,8 +57,11 @@ def test_blueprint_create_edit_delete_flow():
     bp_id = created.headers["location"].split("?")[0].rsplit("/", 1)[-1]
     assert b"Kiosk Fleet" in client.get("/blueprints").content
 
-    # a nameless create is rejected, not silently sent
-    assert b"needs a name" in client.post("/blueprints", data={"name": " "}).content
+    # Apple requires BOTH name and description — neither may be sent blank.
+    assert b"name and a description" in client.post(
+        "/blueprints", data={"name": " ", "description": "x"}).content
+    assert b"name and a description" in client.post(
+        "/blueprints", data={"name": "No Desc", "description": " "}).content
 
     # edit
     client.post(f"/blueprints/{bp_id}/edit", data={"name": "Kiosk Fleet v2",
@@ -77,24 +80,33 @@ def test_blueprint_create_edit_delete_flow():
 def test_configuration_create_edit_delete_flow():
     client = TestClient(create_app(demo=True), base_url="http://127.0.0.1",
                         follow_redirects=False)
-    # invalid JSON is refused before anything is sent
-    bad = client.post("/configurations", data={"name": "X", "payload": "{nope"})
-    assert b"valid JSON" in bad.content
+    profile = '<?xml version="1.0"?><plist version="1.0"><dict/></plist>'
+
+    # Apple REQUIRES configurationProfile on create — refuse before sending.
+    bad = client.post("/configurations", data={"name": "X", "profile": ""})
+    assert b"profile" in bad.content and b"required" in bad.content
+    # filename, when given, must end in .mobileconfig
+    bad2 = client.post("/configurations", data={
+        "name": "X", "profile": profile, "filename": "wrong.txt"})
+    assert b".mobileconfig" in bad2.content
 
     created = client.post("/configurations", data={
         "name": "Corp VPN", "platforms": ["PLATFORM_MACOS"],
-        "payload": '[{"payloadType": "com.apple.vpn.managed"}]'})
+        "profile": profile, "filename": "vpn.mobileconfig"})
     assert created.status_code == 303
     cid = created.headers["location"].split("?")[0].rsplit("/", 1)[-1]
 
     detail = client.get(f"/configurations/{cid}")
-    assert b"com.apple.vpn.managed" in detail.content   # payload round-trips
+    assert b"configurationProfile" in detail.content   # real object shape round-trips
+    assert b"vpn.mobileconfig" in detail.content
     assert b"Corp VPN" in client.get("/configurations").content
 
+    # update is a partial PATCH: a blank profile means "leave it alone"
     client.post(f"/configurations/{cid}/edit", data={
         "name": "Corp VPN v2", "platforms": ["PLATFORM_MACOS", "PLATFORM_IOS"],
-        "payload": '[{"payloadType": "com.apple.vpn.managed"}]'})
+        "profile": ""})
     assert b"Corp VPN v2" in client.get("/configurations").content
+    assert b"configurationProfile" in client.get(f"/configurations/{cid}").content
 
     wrong = client.post(f"/configurations/{cid}/delete", data={"confirm": "nope"})
     assert b"didn" in wrong.content
@@ -105,7 +117,14 @@ def test_configuration_create_edit_delete_flow():
 def test_mdm_server_create_edit_delete_shows_blast_radius():
     client = TestClient(create_app(demo=True), base_url="http://127.0.0.1",
                         follow_redirects=False)
-    created = client.post("/mdm-servers", data={"server_name": "Jamf Test"})
+    # Apple REQUIRES serverCertificate on create — a name-only POST must be
+    # refused here rather than sent as a call that can only fail.
+    no_cert = client.post("/mdm-servers", data={"server_name": "Jamf Test"})
+    assert no_cert.status_code == 200 and b"certificate" in no_cert.content
+
+    created = client.post("/mdm-servers", data={
+        "server_name": "Jamf Test", "cert_name": "jamf.cer",
+        "cert_data": "MIIDXTCCAkWgAwIBAgIJALx"})
     assert created.status_code == 303
     sid = created.headers["location"].split("?")[0].rsplit("/", 1)[-1]
     assert b"Jamf Test" in client.get("/mdm-servers").content

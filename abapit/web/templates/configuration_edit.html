@@ -10,9 +10,10 @@
 <div class="panels">
   <section class="panel wide">
     <h2>{{ 'Configuration details' if editing else 'Create a configuration' }}</h2>
-    <p class="muted">Custom settings are delivered to devices through a blueprint.
-    The payload is the same JSON Apple returns for
-    <code>customSettingsValues</code> — it's validated before anything is sent.</p>
+    <p class="muted">Only <code>CUSTOM_SETTING</code> configurations can be
+    created or edited through the API. The profile below is the contents of a
+    <code>.mobileconfig</code> file — Apple detects the platforms from it when
+    you don't pick any. Configurations reach devices via a blueprint.</p>
 
     <form method="post"
           action="{{ '/configurations/' ~ configuration.id ~ '/edit' if editing else '/configurations' }}"
@@ -21,8 +22,19 @@
         <input name="name" required autocomplete="off" value="{{ attrs.get('name', '') }}">
       </label>
 
+      <label class="full">Configuration profile
+        <span class="muted">({{ 'leave blank to keep the current profile' if editing else 'required — paste the .mobileconfig XML' }})</span>
+        <textarea name="profile" rows="12" spellcheck="false"
+                  placeholder="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&#10;&lt;!DOCTYPE plist PUBLIC …&gt;">{{ profile_text }}</textarea>
+      </label>
+
+      <label>Filename <span class="muted">(optional, must end in .mobileconfig)</span>
+        <input name="filename" autocomplete="off" placeholder="corp-wifi.mobileconfig"
+               value="{{ filename }}">
+      </label>
+
       <div class="full">
-        <span class="muted">Platforms</span>
+        <span class="muted">Platforms <em>(optional — auto-detected from the profile)</em></span>
         <div class="chips">
           {% for p in platforms %}
           <label class="chip"><input type="checkbox" name="platforms" value="{{ p }}"
@@ -31,11 +43,6 @@
           {% endfor %}
         </div>
       </div>
-
-      <label class="full">Custom settings payload <span class="muted">(JSON — leave blank for none)</span>
-        <textarea name="payload" rows="12" spellcheck="false"
-                  placeholder='[{"payloadType": "com.apple.wifi.managed", "payloadContent": {"SSID_STR": "CorpNet"}}]'>{{ payload_text }}</textarea>
-      </label>
 
       <div class="full">
         <button class="btn primary">{{ 'Save changes' if editing else 'Create configuration' }}</button>

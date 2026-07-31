@@ -20,8 +20,8 @@
         <input name="name" required autocomplete="off"
                value="{{ blueprint.attributes.get('name', '') if editing else '' }}">
       </label>
-      <label class="full">Description
-        <textarea name="description" rows="3">{{ blueprint.attributes.get('description', '') if editing else '' }}</textarea>
+      <label class="full">Description <span class="muted">(required by Apple)</span>
+        <textarea name="description" rows="3" required>{{ blueprint.attributes.get('description', '') if editing else '' }}</textarea>
       </label>
       <div class="full">
         <button class="btn primary">{{ 'Save changes' if editing else 'Create blueprint' }}</button>

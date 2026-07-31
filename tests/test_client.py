@@ -137,19 +137,40 @@ def test_blueprint_relationship_add_sends_jsonapi(org, fake_tokens):
                                          {"type": "apps", "id": "A2"}]}
 
 
-def test_blueprint_relationship_remove_uses_delete_and_orgdevices_type(org, fake_tokens):
+def test_blueprint_orgdevices_relationship_path_and_type(org, fake_tokens):
+    """Apple's segment is /relationships/orgDevices (NOT /devices) and the
+    member type is "orgDevices" — verified against the published reference."""
     import json
     captured = {}
 
     def handler(request):
         captured["method"] = request.method
+        captured["path"] = request.url.path
         captured["body"] = json.loads(request.content)
         return httpx.Response(204)
 
     client = ApiClient(org, transport=httpx.MockTransport(handler))
     client.remove_blueprint_relationship("BP1", "devices", ["S1"])
     assert captured["method"] == "DELETE"
-    assert captured["body"] == {"data": [{"type": "orgDevices", "id": "S1"}]}  # segment devices, type orgDevices
+    assert captured["path"].endswith("/blueprints/BP1/relationships/orgDevices")
+    assert captured["body"] == {"data": [{"type": "orgDevices", "id": "S1"}]}
+
+
+def test_org_units_use_organizationalunits_path(org, fake_tokens):
+    """The resource path is /v1/organizationalUnits — "orgUnits" 404s."""
+    paths = []
+
+    def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(200, json={"data": []})
+
+    client = ApiClient(org, transport=httpx.MockTransport(handler))
+    client.org_units()
+    client.org_unit("OU1")
+    client.org_unit_user_ids("OU1")
+    assert paths[0].endswith("/v1/organizationalUnits")
+    assert paths[1].endswith("/v1/organizationalUnits/OU1")
+    assert paths[2].endswith("/v1/organizationalUnits/OU1/relationships/users")
 
 
 def test_blueprint_crud_sends_correct_verbs_and_bodies(org, fake_tokens):

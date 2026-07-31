@@ -590,13 +590,31 @@ def create_app(demo: bool = False,
                       server=client().mdm_server(server_id), error="")
 
     @app.post("/mdm-servers", response_class=HTMLResponse)
-    def mdm_server_create(request: Request, server_name: str = Form("")):
+    def mdm_server_create(request: Request, server_name: str = Form(""),
+                          cert_name: str = Form(""), cert_data: str = Form(""),
+                          disown: str = Form("")):
         guard("mdm_servers")
         _require_write("mdm_servers_write")
-        if not server_name.strip():
+
+        def back(error):
             return render(request, "mdm_server_edit.html", active="mdm_servers",
-                          server=None, error="A device management service needs a name.")
-        created = client().create_mdm_server({"serverName": server_name.strip()})
+                          server=None, error=error, server_name=server_name,
+                          cert_name=cert_name, cert_data=cert_data)
+
+        if not server_name.strip():
+            return back("A device management service needs a name.")
+        # Apple REQUIRES serverCertificate on create — the MDM vendor's public
+        # certificate. Without it the request is rejected, so demand it here
+        # rather than sending a call that can only fail.
+        if not cert_name.strip() or not cert_data.strip():
+            return back("Creating a service requires your MDM vendor's public "
+                        "certificate — both a filename and its base64 data.")
+        attrs = {"serverName": server_name.strip(),
+                 "serverCertificate": {"name": cert_name.strip(),
+                                       "data": "".join(cert_data.split())}}
+        if disown:
+            attrs["enableMdmDisownFlag"] = True
+        created = client().create_mdm_server(attrs)
         _bust_mdm_servers()
         msg = f"Created device management service {server_name.strip()!r}."
         return RedirectResponse(f"/mdm-servers/{created.get('id', '')}?msg={quote(msg)}",
@@ -815,9 +833,11 @@ def create_app(demo: bool = False,
                          description: str = Form("")):
         guard("blueprints")
         _require_write("blueprints_write")
-        if not name.strip():
+        # Apple requires BOTH name and description when creating a blueprint.
+        if not name.strip() or not description.strip():
             return render(request, "blueprint_edit.html", active="blueprints",
-                          blueprint=None, error="A blueprint needs a name.")
+                          blueprint=None,
+                          error="A blueprint needs both a name and a description.")
         created = client().create_blueprint({"name": name.strip(),
                                              "description": description.strip()})
         _bust_blueprints()
@@ -984,24 +1004,34 @@ def create_app(demo: bool = False,
         app.state.cache = {k: v for k, v in app.state.cache.items()
                            if not (k[0] == org_key and k[1] in stale)}
 
-    def _parse_payload(text: str):
-        """customSettingsValues must be valid JSON — validate here so a typo is
-        an error message, never a malformed PATCH to a real org."""
-        text = (text or "").strip()
-        if not text:
+    def _custom_settings(profile: str, filename: str, *, required: bool):
+        """Apple's `customSettingsValues` is a specific object — NOT free-form
+        JSON: {"configurationProfile": "<?xml …>", "filename": "x.mobileconfig"}.
+        configurationProfile is required on create; filename is optional but
+        must end in .mobileconfig. Validated here so a bad payload is a form
+        error, never a rejected (or worse, wrong) write against a real org."""
+        profile = (profile or "").strip()
+        filename = (filename or "").strip()
+        if not profile:
+            if required:
+                raise ValueError("A configuration profile (.mobileconfig XML) is required.")
             return None
-        try:
-            return json.loads(text)
-        except ValueError as exc:
-            raise ValueError(f"Custom settings payload isn't valid JSON: {exc}") from exc
+        if filename and not filename.endswith(".mobileconfig"):
+            raise ValueError("Filename must end in .mobileconfig.")
+        values = {"configurationProfile": profile}
+        if filename:
+            values["filename"] = filename
+        return values
 
-    def _config_form(request: Request, item, error=""):
+    def _config_form(request: Request, item, error="", profile="", filename=""):
         attrs = dict((item or {}).get("attributes", {}))
-        payload = attrs.get("customSettingsValues")
+        values = attrs.get("customSettingsValues") or {}
+        if isinstance(values, dict):
+            profile = profile or values.get("configurationProfile", "")
+            filename = filename or values.get("filename", "")
         return render(request, "configuration_edit.html", active="configurations",
                       configuration=item, attrs=attrs, platforms=PLATFORMS,
-                      payload_text=json.dumps(payload, indent=2) if payload else "",
-                      error=error)
+                      profile_text=profile, filename=filename, error=error)
 
     # Registered before /configurations/{id} so "new" isn't matched as an id.
     @app.get("/configurations/new", response_class=HTMLResponse)
@@ -1019,19 +1049,25 @@ def create_app(demo: bool = False,
     @app.post("/configurations", response_class=HTMLResponse)
     def configuration_create(request: Request, name: str = Form(""),
                              platforms: list[str] = Form(default=[]),
-                             payload: str = Form("")):
+                             profile: str = Form(""), filename: str = Form("")):
         guard("configurations")
         _require_write("configurations_write")
-        try:
-            values = _parse_payload(payload)
-        except ValueError as exc:
-            return _config_form(request, None, error=str(exc))
         if not name.strip():
-            return _config_form(request, None, error="A configuration needs a name.")
-        created = client().create_configuration({
-            "name": name.strip(), "type": "CUSTOM_SETTING",
-            "configuredForPlatforms": [p for p in platforms if p in PLATFORMS],
-            "customSettingsValues": values})
+            return _config_form(request, None, error="A configuration needs a name.",
+                                profile=profile, filename=filename)
+        try:
+            values = _custom_settings(profile, filename, required=True)
+        except ValueError as exc:
+            return _config_form(request, None, error=str(exc),
+                                profile=profile, filename=filename)
+        attrs = {"name": name.strip(), "type": "CUSTOM_SETTING",
+                 "customSettingsValues": values}
+        # Apple auto-detects platforms from the profile when it's omitted, so
+        # only send the key if the admin actually chose some.
+        chosen = [p for p in platforms if p in PLATFORMS]
+        if chosen:
+            attrs["configuredForPlatforms"] = chosen
+        created = client().create_configuration(attrs)
         _bust_configurations()
         msg = f"Created configuration {name.strip()!r}."
         return RedirectResponse(
@@ -1041,21 +1077,28 @@ def create_app(demo: bool = False,
     def configuration_update(request: Request, configuration_id: str,
                              name: str = Form(""),
                              platforms: list[str] = Form(default=[]),
-                             payload: str = Form("")):
+                             profile: str = Form(""), filename: str = Form("")):
         guard("configurations")
         _require_write("configurations_write")
         c = client()
-        try:
-            values = _parse_payload(payload)
-        except ValueError as exc:
-            return _config_form(request, c.configuration(configuration_id), error=str(exc))
         if not name.strip():
             return _config_form(request, c.configuration(configuration_id),
-                                error="A configuration needs a name.")
-        c.update_configuration(configuration_id, {
-            "name": name.strip(),
-            "configuredForPlatforms": [p for p in platforms if p in PLATFORMS],
-            "customSettingsValues": values})
+                                error="A configuration needs a name.",
+                                profile=profile, filename=filename)
+        try:
+            # Update is a partial PATCH — an unchanged/blank profile just means
+            # "leave it alone", so it isn't required here.
+            values = _custom_settings(profile, filename, required=False)
+        except ValueError as exc:
+            return _config_form(request, c.configuration(configuration_id),
+                                error=str(exc), profile=profile, filename=filename)
+        attrs: dict = {"name": name.strip()}
+        chosen = [p for p in platforms if p in PLATFORMS]
+        if chosen:
+            attrs["configuredForPlatforms"] = chosen
+        if values is not None:
+            attrs["customSettingsValues"] = values
+        c.update_configuration(configuration_id, attrs)
         _bust_configurations(configuration_id)
         return RedirectResponse(
             f"/configurations/{configuration_id}?msg={quote('Configuration updated.')}",

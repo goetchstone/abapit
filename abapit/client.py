@@ -232,7 +232,7 @@ class ApiClient:
         ("mdm_enrolled", "Apple MDM enrolled", "mdmDevices", {"limit": 1}, True),
         ("users", "Users", "users", {"limit": 1}, True),
         ("user_groups", "User groups", "userGroups", {"limit": 1}, True),
-        ("org_units", "Org units", "orgUnits", {"limit": 1}, True),
+        ("org_units", "Org units", "organizationalUnits", {"limit": 1}, True),
         ("apps", "Apps", "apps", {"limit": 1}, True),
         ("packages", "Packages", "packages", {"limit": 1}, True),
         ("blueprints", "Blueprints", "blueprints", {"limit": 1}, True),
@@ -336,13 +336,13 @@ class ApiClient:
     # -- organizational units (Business API only) -----------------------------
 
     def org_units(self) -> list[dict]:
-        return self.list_all("orgUnits")
+        return self.list_all("organizationalUnits")
 
     def org_unit(self, org_unit_id: str) -> dict:
-        return self.get(f"orgUnits/{org_unit_id}").get("data", {})
+        return self.get(f"organizationalUnits/{org_unit_id}").get("data", {})
 
     def org_unit_user_ids(self, org_unit_id: str) -> list[str]:
-        linkages = self.list_all(f"orgUnits/{org_unit_id}/relationships/users")
+        linkages = self.list_all(f"organizationalUnits/{org_unit_id}/relationships/users")
         return [item.get("id", "") for item in linkages]
 
     # -- content (Business API only) ------------------------------------------
@@ -395,7 +395,7 @@ class ApiClient:
         "packages": ("packages", "packages"),
         "configurations": ("configurations", "configurations"),
         "userGroups": ("userGroups", "userGroups"),
-        "devices": ("devices", "orgDevices"),
+        "devices": ("orgDevices", "orgDevices"),
         "users": ("users", "users"),
     }
 
