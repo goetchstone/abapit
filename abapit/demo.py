@@ -435,13 +435,21 @@ class DemoClient:
         # that for the seeded configs, but never clobber a payload that was
         # actually created/edited through the write flow.
         if config and config["attributes"].get("customSettingsValues") is None:
+            name = config["attributes"].get("name", "profile")
             config = {**config, "attributes": {
                 **config["attributes"],
-                "customSettingsValues": [{
-                    "payloadType": "com.apple.wifi.managed",
-                    "payloadContent": {"SSID_STR": "CorpNet",
-                                       "EncryptionType": "WPA3"},
-                }],
+                # Apple's real shape: a profile document + filename, not a
+                # list of payload dicts.
+                "customSettingsValues": {
+                    "configurationProfile":
+                        '<?xml version="1.0" encoding="UTF-8"?>\n'
+                        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                        '<plist version="1.0"><dict>'
+                        '<key>PayloadType</key><string>com.apple.wifi.managed</string>'
+                        '</dict></plist>',
+                    "filename": f"{name.lower().replace(' ', '-')}.mobileconfig",
+                },
             }}
         return config
 

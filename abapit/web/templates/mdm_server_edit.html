@@ -13,13 +13,32 @@
     <p class="muted">A device management service is the MDM that devices are
     assigned to in Apple Business Manager. Devices are moved on the
     <a href="/assign">Assign to MDM</a> page, not here.</p>
+
     <form method="post"
           action="{{ '/mdm-servers/' ~ server.id ~ '/edit' if editing else '/mdm-servers' }}"
           class="form-grid">
       <label class="full">Name
         <input name="server_name" required autocomplete="off"
-               value="{{ server.attributes.get('serverName', '') if editing else '' }}">
+               value="{{ server.attributes.get('serverName', '') if editing else server_name | default('') }}">
       </label>
+
+      {% if not editing %}
+      {# Apple requires the MDM vendor's public certificate when CREATING a
+         service (not when renaming one), so these fields only appear here. #}
+      <label class="full">Certificate filename
+        <input name="cert_name" required autocomplete="off"
+               placeholder="my-mdm.cer" value="{{ cert_name | default('') }}">
+      </label>
+      <label class="full">Certificate data <span class="muted">(base64, from your MDM vendor)</span>
+        <textarea name="cert_data" rows="8" spellcheck="false" required
+                  placeholder="MIIDXTCCAkWgAwIBAgIJALx…">{{ cert_data | default('') }}</textarea>
+      </label>
+      <label class="full"><input type="checkbox" name="disown" value="1">
+        Allow this service to release devices from Apple Business Manager
+        <span class="muted">(enableMdmDisownFlag)</span>
+      </label>
+      {% endif %}
+
       <div class="full">
         <button class="btn primary">{{ 'Save changes' if editing else 'Create service' }}</button>
         <a class="btn ghost" href="{{ '/mdm-servers/' ~ server.id if editing else '/mdm-servers' }}">Cancel</a>

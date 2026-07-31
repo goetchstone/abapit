@@ -232,7 +232,7 @@ class ApiClient:
         ("mdm_enrolled", "Apple MDM enrolled", "mdmDevices", {"limit": 1}, True),
         ("users", "Users", "users", {"limit": 1}, True),
         ("user_groups", "User groups", "userGroups", {"limit": 1}, True),
-        ("org_units", "Org units", "orgUnits", {"limit": 1}, True),
+        ("org_units", "Org units", "organizationalUnits", {"limit": 1}, True),
         ("apps", "Apps", "apps", {"limit": 1}, True),
         ("packages", "Packages", "packages", {"limit": 1}, True),
         ("blueprints", "Blueprints", "blueprints", {"limit": 1}, True),
@@ -336,13 +336,13 @@ class ApiClient:
     # -- organizational units (Business API only) -----------------------------
 
     def org_units(self) -> list[dict]:
-        return self.list_all("orgUnits")
+        return self.list_all("organizationalUnits")
 
     def org_unit(self, org_unit_id: str) -> dict:
-        return self.get(f"orgUnits/{org_unit_id}").get("data", {})
+        return self.get(f"organizationalUnits/{org_unit_id}").get("data", {})
 
     def org_unit_user_ids(self, org_unit_id: str) -> list[str]:
-        linkages = self.list_all(f"orgUnits/{org_unit_id}/relationships/users")
+        linkages = self.list_all(f"organizationalUnits/{org_unit_id}/relationships/users")
         return [item.get("id", "") for item in linkages]
 
     # -- content (Business API only) ------------------------------------------
@@ -358,7 +358,19 @@ class ApiClient:
 
     def blueprint(self, blueprint_id: str, include: str = "") -> dict:
         params = {"include": include} if include else None
-        return self.get(f"blueprints/{blueprint_id}", params)
+        try:
+            return self.get(f"blueprints/{blueprint_id}", params)
+        except ApiError as exc:
+            # Apple rejects the WHOLE request when the API account's role can't
+            # read one of the included relationships (a Content Manager role
+            # 403s on users/userGroups, and the blueprint fetch then 400s).
+            # The blueprint itself is readable, so fall back to the bare
+            # resource rather than failing the page.
+            if include and exc.status in (400, 403):
+                log.info("blueprint %s include=%s rejected (%d) — retrying without "
+                         "includes", blueprint_id, include, exc.status)
+                return self.get(f"blueprints/{blueprint_id}")
+            raise
 
     # -- generic JSON:API resource writes ------------------------------------
     # Same shape for every writable v2.0+ resource (blueprints, configurations,
@@ -395,7 +407,7 @@ class ApiClient:
         "packages": ("packages", "packages"),
         "configurations": ("configurations", "configurations"),
         "userGroups": ("userGroups", "userGroups"),
-        "devices": ("devices", "orgDevices"),
+        "devices": ("orgDevices", "orgDevices"),
         "users": ("users", "users"),
     }
 
